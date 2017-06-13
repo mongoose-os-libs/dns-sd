@@ -1,0 +1,2 @@
+config_schema:
+  - ["dns_sd.host_name", "mOS_esp32_??????"]
