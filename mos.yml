@@ -16,6 +16,9 @@ config_schema:
 build_vars:
   MGOS_ENABLE_MDNS: 1
 
+libs:
+  - origin: https://github.com/mongoose-os-libs/http-server
+
 tags:
   - c
   - dns-sd

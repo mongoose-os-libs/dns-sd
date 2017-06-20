@@ -14,6 +14,8 @@
 
 #include "mgos_dns_sd.h"
 
+#include "mgos_http_server.h"
+
 #include "common/cs_dbg.h"
 #include "common/platform.h"
 #include "fw/src/mgos_mdns.h"
