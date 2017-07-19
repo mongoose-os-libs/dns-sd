@@ -18,12 +18,12 @@
 
 #include "common/cs_dbg.h"
 #include "common/platform.h"
-#include "fw/src/mgos_mdns.h"
-#include "fw/src/mgos_mongoose.h"
-#include "fw/src/mgos_net.h"
-#include "fw/src/mgos_sys_config.h"
-#include "fw/src/mgos_timers.h"
-#include "fw/src/mgos_wifi.h"
+#include "mgos_mdns.h"
+#include "mgos_mongoose.h"
+#include "mgos_net.h"
+#include "mgos_sys_config.h"
+#include "mgos_timers.h"
+#include "mgos_wifi.h"
 #include "mongoose/mongoose.h"
 
 #define SD_DOMAIN ".local"

@@ -12,8 +12,8 @@
 #include "common/mg_str.h"
 #include "common/platform.h"
 #include "common/queue.h"
-#include "fw/src/mgos_features.h"
-#include "fw/src/mgos_init.h"
+#include "mgos_features.h"
+#include "mgos_init.h"
 
 #ifdef __cplusplus
 extern "C" {
