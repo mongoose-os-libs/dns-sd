@@ -20,6 +20,7 @@
 #include "common/platform.h"
 #include "fw/src/mgos_mdns.h"
 #include "fw/src/mgos_mongoose.h"
+#include "fw/src/mgos_net.h"
 #include "fw/src/mgos_sys_config.h"
 #include "fw/src/mgos_timers.h"
 #include "fw/src/mgos_wifi.h"
@@ -88,17 +89,22 @@ static void add_nsec_record(const char *name, struct mg_dns_reply *reply,
 }
 
 static void add_a_record(const char *name, struct mg_dns_reply *reply) {
-  char *ip = mgos_wifi_get_sta_ip();
-  if (ip == NULL) ip = mgos_wifi_get_ap_ip();
-  if (ip != NULL) {
-    uint32_t addr = inet_addr(ip);
+  uint32_t addr = 0;
+  struct mgos_net_ip_info ip_info;
+  if (mgos_net_get_ip_info(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_STA,
+                           &ip_info)) {
+    addr = ip_info.ip.sin_addr.s_addr;
+  } else if (mgos_net_get_ip_info(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_AP,
+                                  &ip_info)) {
+    addr = ip_info.ip.sin_addr.s_addr;
+  }
+  if (addr != 0) {
     struct mg_dns_resource_record rr =
         make_dns_rr(MG_DNS_A_RECORD, RCLASS_IN_FLUSH);
     mg_dns_encode_record(reply->io, &rr, name, strlen(name), &addr,
                          sizeof(addr));
     reply->msg->num_answers++;
   }
-  free(ip);
 }
 
 static void append_label(struct mbuf *m, struct mg_str key, struct mg_str val) {
@@ -291,13 +297,16 @@ static void dns_sd_timer_cb(void *arg) {
   }
 }
 
-static void dns_sd_wifi_ev_handler(enum mgos_wifi_status event, void *data) {
+static void dns_sd_net_ev_handler(enum mgos_net_event ev,
+                                  const struct mgos_net_event_data *ev_data,
+                                  void *data) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", event, data, c));
-  if (event == MGOS_WIFI_IP_ACQUIRED && c != NULL) {
+  LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", ev, data, c));
+  if (ev == MGOS_NET_EV_IP_ACQUIRED && c != NULL) {
     dns_sd_advertise(c);
     mgos_set_timer(1000, 0, dns_sd_timer_cb, 0); /* By RFC, repeat */
   }
+  (void) ev_data;
 }
 
 /* Initialize the DNS-SD subsystem */
@@ -315,7 +324,7 @@ bool mgos_dns_sd_init(void) {
     return false;
   }
   mgos_mdns_add_handler(handler, NULL);
-  mgos_wifi_add_on_change_cb(dns_sd_wifi_ev_handler, NULL);
+  mgos_net_add_event_handler(dns_sd_net_ev_handler, NULL);
   mgos_set_timer(c->dns_sd.ttl * 1000 / 2 + 1, 1, dns_sd_timer_cb, 0);
   LOG(LL_INFO, ("MDNS initialized, host %s, ttl %d", c->dns_sd.host_name,
                 c->dns_sd.ttl));
