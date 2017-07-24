@@ -23,8 +23,10 @@
 #include "mgos_net.h"
 #include "mgos_sys_config.h"
 #include "mgos_timers.h"
-#include "mgos_wifi.h"
 #include "mongoose/mongoose.h"
+#ifdef MGOS_HAVE_WIFI
+#include "mgos_wifi.h"
+#endif
 
 #define SD_DOMAIN ".local"
 #define MGOS_DNS_SD_HTTP_TYPE "_http._tcp"
@@ -91,6 +93,7 @@ static void add_nsec_record(const char *name, struct mg_dns_reply *reply,
 static void add_a_record(const char *name, struct mg_dns_reply *reply) {
   uint32_t addr = 0;
   struct mgos_net_ip_info ip_info;
+#ifdef MGOS_HAVE_WIFI
   if (mgos_net_get_ip_info(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_STA,
                            &ip_info)) {
     addr = ip_info.ip.sin_addr.s_addr;
@@ -98,6 +101,8 @@ static void add_a_record(const char *name, struct mg_dns_reply *reply) {
                                   &ip_info)) {
     addr = ip_info.ip.sin_addr.s_addr;
   }
+#endif
+  (void) ip_info;
   if (addr != 0) {
     struct mg_dns_resource_record rr =
         make_dns_rr(MG_DNS_A_RECORD, RCLASS_IN_FLUSH);
@@ -313,12 +318,14 @@ static void dns_sd_net_ev_handler(enum mgos_net_event ev,
 bool mgos_dns_sd_init(void) {
   const struct sys_config *c = get_cfg();
   if (!c->dns_sd.enable) return true;
+#ifdef MGOS_HAVE_WIFI
   if (c->wifi.ap.enable && c->wifi.sta.enable) {
     /* Reason: multiple interfaces. More work is required to make sure
      * requests and responses are correctly plumbed to the right interface. */
     LOG(LL_ERROR, ("MDNS does not work in AP+STA mode"));
     return false;
   }
+#endif
   if (!c->http.enable) {
     LOG(LL_ERROR, ("MDNS wants HTTP enabled"));
     return false;
