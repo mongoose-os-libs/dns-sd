@@ -38,13 +38,14 @@
 #define SD_TYPE_ENUM_NAME "_services._dns-sd._udp" SD_DOMAIN
 
 static void make_host_name(char *buf, size_t buf_len) {
-  snprintf(buf, buf_len, "%s%s", get_cfg()->dns_sd.host_name, SD_DOMAIN);
+  snprintf(buf, buf_len, "%s%s", mgos_sys_config_get_dns_sd_host_name(),
+           SD_DOMAIN);
   buf[buf_len - 1] = '\0'; /* In case snprintf overrun */
   mgos_expand_mac_address_placeholders(buf);
 }
 
 static void make_service_name(char *buf, size_t buf_len) {
-  snprintf(buf, buf_len, "%s.%s", get_cfg()->dns_sd.host_name,
+  snprintf(buf, buf_len, "%s.%s", mgos_sys_config_get_dns_sd_host_name(),
            MGOS_DNS_SD_HTTP_TYPE_FULL);
   buf[buf_len - 1] = '\0'; /* In case snprintf overrun */
   mgos_expand_mac_address_placeholders(buf);
@@ -55,7 +56,7 @@ static struct mg_dns_resource_record make_dns_rr(int type, uint16_t rclass) {
       .name = mg_mk_str(""),
       .rtype = type,
       .rclass = rclass,
-      .ttl = get_cfg()->dns_sd.ttl,
+      .ttl = mgos_sys_config_get_dns_sd_ttl(),
       .kind = MG_DNS_ANSWER,
   };
   return rr;
@@ -74,7 +75,7 @@ static void add_srv_record(const char *host_name, const char *service_name,
   mbuf_append(rdata, &port, sizeof(port));
   mg_dns_encode_name(rdata, host_name, strlen(host_name));
   mg_dns_reply_record(reply, &rr, service_name, MG_DNS_SRV_RECORD,
-                      get_cfg()->dns_sd.ttl, rdata->buf, rdata->len);
+                      mgos_sys_config_get_dns_sd_ttl(), rdata->buf, rdata->len);
 }
 
 // This record contains negative answer for the IPv6 AAAA question
@@ -122,14 +123,15 @@ static void append_label(struct mbuf *m, struct mg_str key, struct mg_str val) {
 
 static void add_txt_record(const char *name, struct mg_dns_reply *reply,
                            struct mbuf *rdata) {
-  const struct sys_ro_vars *v = get_ro_vars();
-  const struct sys_config *c = get_cfg();
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_TXT_RECORD, RCLASS_IN_FLUSH);
   rdata->len = 0;
-  append_label(rdata, mg_mk_str("id"), mg_mk_str(c->device.id));
-  append_label(rdata, mg_mk_str("fw_id"), mg_mk_str(v->fw_id));
-  append_label(rdata, mg_mk_str("arch"), mg_mk_str(v->arch));
+  append_label(rdata, mg_mk_str("id"),
+               mg_mk_str(mgos_sys_config_get_device_id()));
+  append_label(rdata, mg_mk_str("fw_id"),
+               mg_mk_str(mgos_sys_ro_vars_get_fw_id()));
+  append_label(rdata, mg_mk_str("arch"),
+               mg_mk_str(mgos_sys_ro_vars_get_arch()));
 /*
  * TODO(dfrank): probably improve hooks so that we can add functionality
  * here from the rpc-common
@@ -141,7 +143,7 @@ static void add_txt_record(const char *name, struct mg_dns_reply *reply,
 #endif
 
   /* Append extra labels from config */
-  const char *p = c->dns_sd.txt;
+  const char *p = mgos_sys_config_get_dns_sd_txt();
   struct mg_str key, val;
   while ((p = mg_next_comma_list_entry(p, &key, &val)) != NULL) {
     append_label(rdata, key, val);
@@ -177,7 +179,7 @@ static void advertise_type(struct mg_dns_reply *reply, struct mbuf *rdata) {
 
 static void handler(struct mg_connection *nc, int ev, void *ev_data,
                     void *user_data) {
-  if (!get_cfg()->dns_sd.enable) return;
+  if (!mgos_sys_config_get_dns_sd_enable()) return;
 
   switch (ev) {
     case MG_DNS_MESSAGE: {
@@ -316,24 +318,26 @@ static void dns_sd_net_ev_handler(enum mgos_net_event ev,
 
 /* Initialize the DNS-SD subsystem */
 bool mgos_dns_sd_init(void) {
-  const struct sys_config *c = get_cfg();
-  if (!c->dns_sd.enable) return true;
+  if (!mgos_sys_config_get_dns_sd_enable()) return true;
 #ifdef MGOS_HAVE_WIFI
-  if (c->wifi.ap.enable && c->wifi.sta.enable) {
+  if (mgos_sys_config_get_wifi_ap_enable() &&
+      mgos_sys_config_get_wifi_sta_enable()) {
     /* Reason: multiple interfaces. More work is required to make sure
      * requests and responses are correctly plumbed to the right interface. */
     LOG(LL_ERROR, ("MDNS does not work in AP+STA mode"));
     return false;
   }
 #endif
-  if (!c->http.enable) {
+  if (!mgos_sys_config_get_http_enable()) {
     LOG(LL_ERROR, ("MDNS wants HTTP enabled"));
     return false;
   }
   mgos_mdns_add_handler(handler, NULL);
   mgos_net_add_event_handler(dns_sd_net_ev_handler, NULL);
-  mgos_set_timer(c->dns_sd.ttl * 1000 / 2 + 1, 1, dns_sd_timer_cb, 0);
-  LOG(LL_INFO, ("MDNS initialized, host %s, ttl %d", c->dns_sd.host_name,
-                c->dns_sd.ttl));
+  mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1, 1,
+                 dns_sd_timer_cb, 0);
+  LOG(LL_INFO, ("MDNS initialized, host %s, ttl %d",
+                mgos_sys_config_get_dns_sd_host_name(),
+                mgos_sys_config_get_dns_sd_ttl()));
   return true;
 }
