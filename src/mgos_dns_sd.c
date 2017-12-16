@@ -12,8 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "mgos_dns_sd.h"
-
 #include "mgos_http_server.h"
 
 #include "common/cs_dbg.h"
