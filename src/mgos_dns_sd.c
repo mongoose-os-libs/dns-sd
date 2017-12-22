@@ -302,16 +302,14 @@ static void dns_sd_timer_cb(void *arg) {
   }
 }
 
-static void dns_sd_net_ev_handler(enum mgos_net_event ev,
-                                  const struct mgos_net_event_data *ev_data,
-                                  void *data) {
+static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", ev, data, c));
+  LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", ev, arg, c));
   if (ev == MGOS_NET_EV_IP_ACQUIRED && c != NULL) {
     dns_sd_advertise(c);
     mgos_set_timer(1000, 0, dns_sd_timer_cb, 0); /* By RFC, repeat */
   }
-  (void) ev_data;
+  (void) evd;
 }
 
 /* Initialize the DNS-SD subsystem */
@@ -331,7 +329,7 @@ bool mgos_dns_sd_init(void) {
     return false;
   }
   mgos_mdns_add_handler(handler, NULL);
-  mgos_net_add_event_handler(dns_sd_net_ev_handler, NULL);
+  mgos_event_add_group_handler(MGOS_EVENT_GRP_NET, dns_sd_net_ev_handler, NULL);
   mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1, 1,
                  dns_sd_timer_cb, 0);
   LOG(LL_INFO, ("MDNS initialized, host %s, ttl %d",
