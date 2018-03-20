@@ -9,6 +9,7 @@
  * DNS-SD host_name:        my_host.local
  */
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +46,9 @@ static void make_host_name(char *buf, size_t buf_len) {
 }
 
 static void make_service_name(char *buf, size_t buf_len) {
-  snprintf(buf, buf_len, "%s.%s", s_host_name, MGOS_DNS_SD_HTTP_TYPE_FULL);
+  const char *dp = strchr(s_host_name, '.');
+  snprintf(buf, buf_len, "%.*s.%s", (int) (dp - s_host_name), s_host_name,
+           MGOS_DNS_SD_HTTP_TYPE_FULL);
   buf[buf_len - 1] = '\0'; /* In case snprintf overrun */
 }
 
@@ -346,6 +349,9 @@ bool mgos_dns_sd_init(void) {
   mg_asprintf(&s_host_name, 0, "%s%s", mgos_sys_config_get_dns_sd_host_name(),
               SD_DOMAIN);
   mgos_expand_mac_address_placeholders(s_host_name);
+  for (size_t i = 0; i < strlen(s_host_name) - sizeof(SD_DOMAIN); i++) {
+    if (!isalnum((int) s_host_name[i])) s_host_name[i] = '-';
+  }
   LOG(LL_INFO, ("MDNS initialized, host %s, ttl %d", s_host_name,
                 mgos_sys_config_get_dns_sd_ttl()));
   return true;
