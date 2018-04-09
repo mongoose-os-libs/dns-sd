@@ -28,6 +28,7 @@ init_after:
 cdefs:
   MG_ENABLE_DNS: 1
   MG_ENABLE_DNS_SERVER: 1
+  MGOS_DNS_SD_HIDE_ADDITIONAL_INFO: 0
 
 tags:
   - c

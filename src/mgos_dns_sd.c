@@ -140,12 +140,14 @@ static void add_txt_record(const char *name, struct mg_dns_reply *reply,
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_TXT_RECORD, RCLASS_IN_FLUSH);
   rdata->len = 0;
+#if !MGOS_DNS_SD_HIDE_ADDITIONAL_INFO
   append_label(rdata, mg_mk_str("id"),
                mg_mk_str(mgos_sys_config_get_device_id()));
   append_label(rdata, mg_mk_str("fw_id"),
                mg_mk_str(mgos_sys_ro_vars_get_fw_id()));
   append_label(rdata, mg_mk_str("arch"),
                mg_mk_str(mgos_sys_ro_vars_get_arch()));
+#endif
 /*
  * TODO(dfrank): probably improve hooks so that we can add functionality
  * here from the rpc-common
