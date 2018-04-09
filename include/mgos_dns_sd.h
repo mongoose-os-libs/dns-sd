@@ -27,6 +27,9 @@ extern "C" {
  */
 const char *mgos_dns_sd_get_host_name(void);
 
+/* Send a DNS-SD advertisement message now. */
+void mgos_dns_sd_advertise(void);
+
 #ifdef __cplusplus
 }
 #endif

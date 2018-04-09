@@ -21,6 +21,8 @@
  * DNS-SD host_name:        my_host.local
  */
 
+#include "mgos_dns_sd.h"
+
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -317,12 +319,9 @@ static void dns_sd_advertise(struct mg_connection *c) {
   mbuf_free(&mbuf2);
 }
 
-static void dns_sd_timer_cb(void *arg) {
-  struct mg_connection *c = mgos_mdns_get_listener();
-  LOG(LL_DEBUG, ("arg %p, mdns_listener %p", arg, c));
-  if (c != NULL) {
-    dns_sd_advertise(c);
-  }
+static void dns_sd_adv_timer_cb(void *arg) {
+  mgos_dns_sd_advertise();
+  (void) arg;
 }
 
 static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
@@ -330,9 +329,14 @@ static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
   LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", ev, arg, c));
   if (ev == MGOS_NET_EV_IP_ACQUIRED && c != NULL) {
     dns_sd_advertise(c);
-    mgos_set_timer(1000, 0, dns_sd_timer_cb, 0); /* By RFC, repeat */
+    mgos_set_timer(1000, 0, dns_sd_adv_timer_cb, NULL); /* By RFC, repeat */
   }
   (void) evd;
+}
+
+void mgos_dns_sd_advertise(void) {
+  struct mg_connection *c = mgos_mdns_get_listener();
+  if (c != NULL) dns_sd_advertise(c);
 }
 
 const char *mgos_dns_sd_get_host_name(void) {
@@ -358,8 +362,8 @@ bool mgos_dns_sd_init(void) {
   if (!mgos_mdns_init()) return false;
   mgos_mdns_add_handler(handler, NULL);
   mgos_event_add_group_handler(MGOS_EVENT_GRP_NET, dns_sd_net_ev_handler, NULL);
-  mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1, 1,
-                 dns_sd_timer_cb, 0);
+  mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1,
+                 MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
   mg_asprintf(&s_host_name, 0, "%s%s", mgos_sys_config_get_dns_sd_host_name(),
               SD_DOMAIN);
   mgos_expand_mac_address_placeholders(s_host_name);
