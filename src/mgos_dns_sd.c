@@ -66,25 +66,27 @@ static void make_service_name(char *buf, size_t buf_len) {
   buf[buf_len - 1] = '\0'; /* In case snprintf overrun */
 }
 
-static struct mg_dns_resource_record make_dns_rr(int type, uint16_t rclass) {
+static struct mg_dns_resource_record make_dns_rr(int type, uint16_t rclass,
+                                                 int ttl) {
   struct mg_dns_resource_record rr = {
       .name = MG_NULL_STR,
       .rtype = type,
       .rclass = rclass,
-      .ttl = mgos_sys_config_get_dns_sd_ttl(),
+      .ttl = ttl,
       .kind = MG_DNS_ANSWER,
   };
   return rr;
 }
 
 static void add_srv_record(const char *host_name, const char *service_name,
-                           struct mg_dns_reply *reply, struct mbuf *rdata) {
+                           struct mg_dns_reply *reply, struct mbuf *rdata,
+                           int ttl) {
   /* prio 0, weight 0 */
   char rdata_header[] = {0x0, 0x0, 0x0, 0x0};
   struct mg_connection *lc = mgos_get_sys_http_server();
   uint16_t port = lc == NULL ? 80 : lc->sa.sin.sin_port;
   struct mg_dns_resource_record rr =
-      make_dns_rr(MG_DNS_SRV_RECORD, RCLASS_IN_FLUSH);
+      make_dns_rr(MG_DNS_SRV_RECORD, RCLASS_IN_FLUSH, ttl);
   rdata->len = 0;
   mbuf_append(rdata, rdata_header, sizeof(rdata_header));
   mbuf_append(rdata, &port, sizeof(port));
@@ -95,9 +97,11 @@ static void add_srv_record(const char *host_name, const char *service_name,
 
 // This record contains negative answer for the IPv6 AAAA question
 static void add_nsec_record(const char *name, bool naive_client,
-                            struct mg_dns_reply *reply, struct mbuf *rdata) {
-  struct mg_dns_resource_record rr = make_dns_rr(
-      MG_DNS_NSEC_RECORD, (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH));
+                            struct mg_dns_reply *reply, struct mbuf *rdata,
+                            int ttl) {
+  struct mg_dns_resource_record rr =
+      make_dns_rr(MG_DNS_NSEC_RECORD,
+                  (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
   rdata->len = 0;
   mg_dns_encode_name(rdata, name, strlen(name));
   mbuf_append(rdata, "\x00\x01\x40", 3); /* Only A record is present */
@@ -107,7 +111,7 @@ static void add_nsec_record(const char *name, bool naive_client,
 }
 
 static void add_a_record(const char *name, bool naive_client,
-                         struct mg_dns_reply *reply) {
+                         struct mg_dns_reply *reply, int ttl) {
   uint32_t addr = 0;
   struct mgos_net_ip_info ip_info;
 #ifdef MGOS_HAVE_WIFI
@@ -121,8 +125,9 @@ static void add_a_record(const char *name, bool naive_client,
 #endif
   (void) ip_info;
   if (addr != 0) {
-    struct mg_dns_resource_record rr = make_dns_rr(
-        MG_DNS_A_RECORD, (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH));
+    struct mg_dns_resource_record rr =
+        make_dns_rr(MG_DNS_A_RECORD,
+                    (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
     mg_dns_encode_record(reply->io, &rr, name, strlen(name), &addr,
                          sizeof(addr));
     reply->msg->num_answers++;
@@ -138,9 +143,9 @@ static void append_label(struct mbuf *m, struct mg_str key, struct mg_str val) {
 }
 
 static void add_txt_record(const char *name, struct mg_dns_reply *reply,
-                           struct mbuf *rdata) {
+                           struct mbuf *rdata, int ttl) {
   struct mg_dns_resource_record rr =
-      make_dns_rr(MG_DNS_TXT_RECORD, RCLASS_IN_FLUSH);
+      make_dns_rr(MG_DNS_TXT_RECORD, RCLASS_IN_FLUSH, ttl);
   rdata->len = 0;
 #if !MGOS_DNS_SD_HIDE_ADDITIONAL_INFO
   append_label(rdata, mg_mk_str("id"),
@@ -173,9 +178,10 @@ static void add_txt_record(const char *name, struct mg_dns_reply *reply,
 }
 
 static void add_ptr_record(const char *name, const char *domain,
-                           struct mg_dns_reply *reply, struct mbuf *rdata) {
+                           struct mg_dns_reply *reply, struct mbuf *rdata,
+                           int ttl) {
   struct mg_dns_resource_record rr =
-      make_dns_rr(MG_DNS_PTR_RECORD, RCLASS_IN_NOFLUSH);
+      make_dns_rr(MG_DNS_PTR_RECORD, RCLASS_IN_NOFLUSH, ttl);
   rdata->len = 0;
   mg_dns_encode_name(rdata, domain, strlen(domain));
   mg_dns_encode_record(reply->io, &rr, name, strlen(name), rdata->buf,
@@ -186,14 +192,31 @@ static void add_ptr_record(const char *name, const char *domain,
 static void advertise_type(struct mg_dns_reply *reply, bool naive_client,
                            struct mbuf *rdata) {
   char host_name[128], service_name[128];
+  int ttl = mgos_sys_config_get_dns_sd_ttl();
+
   make_service_name(service_name, sizeof(service_name));
   make_host_name(host_name, sizeof(host_name));
-  add_ptr_record(SD_TYPE_ENUM_NAME, MGOS_DNS_SD_HTTP_TYPE, reply, rdata);
-  add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, service_name, reply, rdata);
-  add_srv_record(host_name, service_name, reply, rdata);
-  add_txt_record(service_name, reply, rdata);
-  add_a_record(host_name, naive_client, reply);
-  add_nsec_record(host_name, naive_client, reply, rdata);
+  add_ptr_record(SD_TYPE_ENUM_NAME, MGOS_DNS_SD_HTTP_TYPE, reply, rdata, ttl);
+  add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, service_name, reply, rdata, ttl);
+  add_srv_record(host_name, service_name, reply, rdata, ttl);
+  add_txt_record(service_name, reply, rdata, ttl);
+  add_a_record(host_name, naive_client, reply, ttl);
+  add_nsec_record(host_name, naive_client, reply, rdata, ttl);
+}
+
+static void goodbye_packet(struct mg_dns_reply *reply, bool naive_client,
+                           struct mbuf *rdata) {
+  char host_name[128], service_name[128];
+  int ttl = 0;
+
+  make_service_name(service_name, sizeof(service_name));
+  make_host_name(host_name, sizeof(host_name));
+  add_ptr_record(SD_TYPE_ENUM_NAME, MGOS_DNS_SD_HTTP_TYPE, reply, rdata, ttl);
+  add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, service_name, reply, rdata, ttl);
+  add_srv_record(host_name, service_name, reply, rdata, ttl);
+  add_txt_record(service_name, reply, rdata, ttl);
+  add_a_record(host_name, naive_client, reply, ttl);
+  add_nsec_record(host_name, naive_client, reply, rdata, ttl);
 }
 
 static void handler(struct mg_connection *nc, int ev, void *ev_data,
@@ -211,7 +234,7 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
       struct mg_connection *reply_conn = nc;
       char host[128], srv[128];
       char *peer = inet_ntoa(nc->sa.sin.sin_addr);
-
+      int ttl = mgos_sys_config_get_dns_sd_ttl();
       LOG(LL_DEBUG, ("---- DNS packet from %s (%d questions, %d answers)", peer,
                      msg->num_questions, msg->num_answers));
       make_host_name(host, sizeof(host));
@@ -260,21 +283,22 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
              strcmp(name, MGOS_DNS_SD_HTTP_TYPE_FULL) == 0)) {
           advertise_type(&reply, naive_client, &rdata);
         } else if (rr->rtype == MG_DNS_PTR_RECORD && strcmp(name, srv) == 0) {
-          add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, name, &reply, &rdata);
+          add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, name, &reply, &rdata, ttl);
           if (!question_a_answered) {
-            add_a_record(host, naive_client, &reply);
-            if (!naive_client) add_nsec_record(host, false, &reply, &rdata);
+            add_a_record(host, naive_client, &reply, ttl);
+            if (!naive_client)
+              add_nsec_record(host, false, &reply, &rdata, ttl);
             question_a_answered++;
           }
         } else if (rr->rtype == MG_DNS_SRV_RECORD && strcmp(name, srv) == 0) {
-          add_srv_record(host, srv, &reply, &rdata);
+          add_srv_record(host, srv, &reply, &rdata, ttl);
         } else if (rr->rtype == MG_DNS_TXT_RECORD && strcmp(name, srv) == 0) {
-          add_txt_record(name, &reply, &rdata);
+          add_txt_record(name, &reply, &rdata, ttl);
         } else if (!question_a_answered && (rr->rtype == MG_DNS_A_RECORD ||
                                             rr->rtype == MG_DNS_AAAA_RECORD) &&
                    strcmp(host, name) == 0) {
-          add_a_record(host, naive_client, &reply);
-          if (!naive_client) add_nsec_record(host, false, &reply, &rdata);
+          add_a_record(host, naive_client, &reply, ttl);
+          if (!naive_client) add_nsec_record(host, false, &reply, &rdata, ttl);
           question_a_answered++;
         } else {
           LOG(LL_DEBUG, (" --- ignoring: name=%s, type=%d", name, rr->rtype));
@@ -319,6 +343,25 @@ static void dns_sd_advertise(struct mg_connection *c) {
   mbuf_free(&mbuf2);
 }
 
+static void dns_sd_goodbye(struct mg_connection *c) {
+  struct mbuf mbuf1, mbuf2;
+  struct mg_dns_message msg;
+  struct mg_dns_reply reply;
+  LOG(LL_DEBUG, ("sending goodbye packet"));
+  mbuf_init(&mbuf1, 0);
+  mbuf_init(&mbuf2, 0);
+  memset(&msg, 0, sizeof(msg));
+  msg.flags = 0x8400;
+  reply = mg_dns_create_reply(&mbuf1, &msg);
+  goodbye_packet(&reply, false /* naive_client */, &mbuf2);
+  if (msg.num_answers > 0) {
+    LOG(LL_DEBUG, ("sending goodbye packet, size %d", (int) reply.io->len));
+    mg_dns_send_reply(c, &reply);
+  }
+  mbuf_free(&mbuf1);
+  mbuf_free(&mbuf2);
+}
+
 static void dns_sd_adv_timer_cb(void *arg) {
   mgos_dns_sd_advertise();
   (void) arg;
@@ -334,13 +377,18 @@ static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
   (void) evd;
 }
 
+const char *mgos_dns_sd_get_host_name(void) {
+  return s_host_name;
+}
+
 void mgos_dns_sd_advertise(void) {
   struct mg_connection *c = mgos_mdns_get_listener();
   if (c != NULL) dns_sd_advertise(c);
 }
 
-const char *mgos_dns_sd_get_host_name(void) {
-  return s_host_name;
+void mgos_dns_sd_goodbye(void) {
+  struct mg_connection *c = mgos_mdns_get_listener();
+  if (c != NULL) dns_sd_goodbye(c);
 }
 
 /* Initialize the DNS-SD subsystem */
