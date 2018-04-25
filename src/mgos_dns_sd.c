@@ -27,6 +27,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
 
 #include "mgos_http_server.h"
 
@@ -279,10 +280,11 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
         rr->rclass |= MGOS_MDNS_CACHE_FLUSH;
 
         if (rr->rtype == MG_DNS_PTR_RECORD &&
-            (strcmp(name, SD_TYPE_ENUM_NAME) == 0 ||
-             strcmp(name, MGOS_DNS_SD_HTTP_TYPE_FULL) == 0)) {
+            (strcasecmp(name, SD_TYPE_ENUM_NAME) == 0 ||
+             strcasecmp(name, MGOS_DNS_SD_HTTP_TYPE_FULL) == 0)) {
           advertise_type(&reply, naive_client, &rdata);
-        } else if (rr->rtype == MG_DNS_PTR_RECORD && strcmp(name, srv) == 0) {
+        } else if (rr->rtype == MG_DNS_PTR_RECORD &&
+                   strcasecmp(name, srv) == 0) {
           add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, name, &reply, &rdata, ttl);
           if (!question_a_answered) {
             add_a_record(host, naive_client, &reply, ttl);
@@ -290,13 +292,15 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
               add_nsec_record(host, false, &reply, &rdata, ttl);
             question_a_answered++;
           }
-        } else if (rr->rtype == MG_DNS_SRV_RECORD && strcmp(name, srv) == 0) {
+        } else if (rr->rtype == MG_DNS_SRV_RECORD &&
+                   strcasecmp(name, srv) == 0) {
           add_srv_record(host, srv, &reply, &rdata, ttl);
-        } else if (rr->rtype == MG_DNS_TXT_RECORD && strcmp(name, srv) == 0) {
+        } else if (rr->rtype == MG_DNS_TXT_RECORD &&
+                   strcasecmp(name, srv) == 0) {
           add_txt_record(name, &reply, &rdata, ttl);
         } else if (!question_a_answered && (rr->rtype == MG_DNS_A_RECORD ||
                                             rr->rtype == MG_DNS_AAAA_RECORD) &&
-                   strcmp(host, name) == 0) {
+                   strcasecmp(host, name) == 0) {
           add_a_record(host, naive_client, &reply, ttl);
           if (!naive_client) add_nsec_record(host, false, &reply, &rdata, ttl);
           question_a_answered++;
