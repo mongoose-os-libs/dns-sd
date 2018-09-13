@@ -33,5 +33,6 @@ cdefs:
 tags:
   - c
   - net
+  - docs:net:DNS-SD
 
 manifest_version: 2017-09-29
