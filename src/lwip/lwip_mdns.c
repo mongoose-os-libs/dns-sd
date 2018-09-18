@@ -38,7 +38,13 @@ void mgos_mdns_hal_join_group(const char *group) {
 
   LOG(LL_INFO, ("Joining multicast group %s", group));
 
-  if (igmp_joingroup(IP4_ADDR_ANY, &group_addr) != ERR_OK) {
+#ifdef IP4_ADDR_ANY4
+#define ADDR IP4_ADDR_ANY4
+#else
+#define ADDR IP4_ADDR_ANY
+#endif
+
+  if (igmp_joingroup(ADDR, &group_addr) != ERR_OK) {
     LOG(LL_INFO, ("udp_join_multigroup failed!"));
   };
 }
