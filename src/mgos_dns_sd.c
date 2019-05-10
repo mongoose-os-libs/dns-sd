@@ -404,12 +404,12 @@ bool mgos_dns_sd_init(void) {
     /* Reason: multiple interfaces. More work is required to make sure
      * requests and responses are correctly plumbed to the right interface. */
     LOG(LL_ERROR, ("MDNS does not work in AP+STA mode"));
-    return false;
+    return true;
   }
 #endif
   if (!mgos_sys_config_get_http_enable()) {
     LOG(LL_ERROR, ("MDNS wants HTTP enabled"));
-    return false;
+    return true;
   }
   if (!mgos_mdns_init()) return false;
   mgos_mdns_add_handler(handler, NULL);
