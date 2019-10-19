@@ -416,8 +416,15 @@ bool mgos_dns_sd_init(void) {
   mgos_event_add_group_handler(MGOS_EVENT_GRP_NET, dns_sd_net_ev_handler, NULL);
   mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1,
                  MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
-  mg_asprintf(&s_host_name, 0, "%s%s", mgos_sys_config_get_dns_sd_host_name(),
-              SD_DOMAIN);
+  const char *hn = mgos_sys_config_get_dns_sd_host_name();
+  if (hn == NULL) {
+    hn = mgos_sys_config_get_device_id();
+  }
+  if (hn == NULL) {
+    LOG(LL_ERROR, ("dns_sd.host_name and device.id are not set"));
+    return false;
+  }
+  mg_asprintf(&s_host_name, 0, "%s%s", hn, SD_DOMAIN);
   mgos_expand_mac_address_placeholders(s_host_name);
   for (size_t i = 0; i < strlen(s_host_name) - sizeof(SD_DOMAIN); i++) {
     if (!isalnum((int) s_host_name[i])) s_host_name[i] = '-';
