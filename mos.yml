@@ -1,7 +1,7 @@
 author: mongoose-os
 description: Implements DNS-SD protocol
 type: lib
-version: 1.0
+version: 1.1.0
 
 platforms: ["esp32", "esp8266"]
 
@@ -23,6 +23,7 @@ libs:
 
 init_after:
   - ethernet
+  - http-server
   - wifi
 
 cdefs:

@@ -15,8 +15,9 @@
  * limitations under the License.
  */
 
-#ifndef CS_MOS_LIBS_DNS_SD_INCLUDE_MGOS_DNS_SD_H_
-#define CS_MOS_LIBS_DNS_SD_INCLUDE_MGOS_DNS_SD_H_
+#pragma once
+
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,37 @@ extern "C" {
  */
 const char *mgos_dns_sd_get_host_name(void);
 
+/* TXT record key/value entry */
+struct mgos_dns_sd_txt_entry {
+  const char *key;
+  const char *value;
+};
+
+/*
+ * Add a service instance.
+ * If service instance already exists, its definition will be replaced.
+ * A record will be added automatically to point to the device.
+ * If txt_entries is not NULL, it must end with an entry with key=NULL.
+ *
+ * Example (for Apple HAP):
+ *
+ * const struct mgos_dns_sd_txt_entry gizmo_txt[] = {
+ *     {.key = "c#", .value = "1"},
+ *     {.key = "ff", .value = "0"},
+ *     {.key = "pv", .value = "1.0"},
+ *     {.key = "id", .value = "11:22:33:44:55:66"},
+ *     {.key = "md", .value = "Fancy Gizmo 9000"},
+ *     {.key = "s#", .value = "1"},
+ *     {.key = "sf", .value = "1"},
+ *     {.key = "ci", .value = "8"},  // Switch
+ *     {.key = NULL},
+ * };
+ * mgos_dns_sd_add_service_instance("gizmo9000", "_hap._tcp", 8080, gizmo_txt);
+ */
+bool mgos_dns_sd_add_service_instance(
+    const char *instance, const char *proto, int port,
+    const struct mgos_dns_sd_txt_entry *txt_entries);
+
 /* Send a DNS-SD advertisement message now. */
 void mgos_dns_sd_advertise(void);
 
@@ -36,5 +68,3 @@ void mgos_dns_sd_goodbye(void);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* CS_MOS_LIBS_DNS_SD_INCLUDE_MGOS_DNS_SD_H_ */

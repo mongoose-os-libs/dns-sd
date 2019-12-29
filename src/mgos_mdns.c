@@ -19,8 +19,8 @@
 
 #include <stdlib.h>
 
-#include "common/platform.h"
 #include "common/cs_dbg.h"
+#include "common/platform.h"
 #include "common/queue.h"
 
 #include "mgos_mongoose.h"

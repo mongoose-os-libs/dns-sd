@@ -17,8 +17,8 @@
 
 #include <stdlib.h>
 
-#include "common/platform.h"
 #include "common/cs_dbg.h"
+#include "common/platform.h"
 
 #include <lwip/igmp.h>
 #include <lwip/inet.h>

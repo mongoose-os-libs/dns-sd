@@ -33,6 +33,7 @@
 
 #include "common/cs_dbg.h"
 #include "common/platform.h"
+#include "common/queue.h"
 #include "mgos_mdns_internal.h"
 #include "mgos_mongoose.h"
 #include "mgos_net.h"
@@ -44,27 +45,38 @@
 #include "mgos_wifi.h"
 #endif
 
-#define SD_DOMAIN ".local"
-#define MGOS_DNS_SD_HTTP_TYPE "_http._tcp"
-#define MGOS_DNS_SD_HTTP_TYPE_FULL MGOS_DNS_SD_HTTP_TYPE SD_DOMAIN
+#define SD_DOMAIN "local"
 #define MGOS_MDNS_QUERY_UNICAST 0x8000
 #define MGOS_MDNS_CACHE_FLUSH 0x8000
 #define RCLASS_IN_NOFLUSH 0x0001
 #define RCLASS_IN_FLUSH 0x8001
-#define SD_TYPE_ENUM_NAME "_services._dns-sd._udp" SD_DOMAIN
+#define SD_TYPE_ENUM_NAME "_services._dns-sd._udp." SD_DOMAIN
 
-static char *s_host_name = NULL;
+struct mgos_dns_sd_service_entry {
+  struct mg_str name; /* full name, instance.proto.domain */
+  int port;
+  struct mg_str txt;
+  SLIST_ENTRY(mgos_dns_sd_service_entry) next;
+  // This field is used to keep track of which records have already been
+  // included in the response. It is a hack: this field is a per-response bit of
+  // state and does not belong here. But as long as we can't have more than one
+  // response in preparation, it's fine.
+  uint8_t flags;
+};
 
-static void make_host_name(char *buf, size_t buf_len) {
-  snprintf(buf, buf_len, "%s", s_host_name);
-  buf[buf_len - 1] = '\0'; /* In case snprintf overrun */
-}
+// Flags fields.
+#define F_PTR_SENT (1 << 0)
+#define F_SRV_SENT (1 << 1)
+#define F_TXT_SENT (1 << 2)
 
-static void make_service_name(char *buf, size_t buf_len) {
-  const char *dp = strchr(s_host_name, '.');
-  snprintf(buf, buf_len, "%.*s.%s", (int) (dp - s_host_name), s_host_name,
-           MGOS_DNS_SD_HTTP_TYPE_FULL);
-  buf[buf_len - 1] = '\0'; /* In case snprintf overrun */
+static struct mg_str s_host_name = MG_NULL_STR;
+SLIST_HEAD(s_instances, mgos_dns_sd_service_entry) s_instances;
+
+static void reset_flags(void) {
+  struct mgos_dns_sd_service_entry *e = NULL;
+  SLIST_FOREACH(e, &s_instances, next) {
+    e->flags = 0;
+  }
 }
 
 static struct mg_dns_resource_record make_dns_rr(int type, uint16_t rclass,
@@ -79,40 +91,43 @@ static struct mg_dns_resource_record make_dns_rr(int type, uint16_t rclass,
   return rr;
 }
 
-static void add_srv_record(const char *host_name, const char *service_name,
-                           struct mg_dns_reply *reply, struct mbuf *rdata,
-                           int ttl) {
+static void add_srv_record(struct mg_dns_reply *reply, struct mg_str name,
+                           struct mg_str host, int port, int ttl,
+                           struct mbuf *rdata) {
   /* prio 0, weight 0 */
   char rdata_header[] = {0x0, 0x0, 0x0, 0x0};
-  struct mg_connection *lc = mgos_get_sys_http_server();
-  uint16_t port = lc == NULL ? 80 : lc->sa.sin.sin_port;
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_SRV_RECORD, RCLASS_IN_FLUSH, ttl);
+  uint16_t port16 = htons(port);
   rdata->len = 0;
   mbuf_append(rdata, rdata_header, sizeof(rdata_header));
-  mbuf_append(rdata, &port, sizeof(port));
-  mg_dns_encode_name(rdata, host_name, strlen(host_name));
-  mg_dns_reply_record(reply, &rr, service_name, MG_DNS_SRV_RECORD,
-                      mgos_sys_config_get_dns_sd_ttl(), rdata->buf, rdata->len);
+  mbuf_append(rdata, &port16, sizeof(port16));
+  mg_dns_encode_name_s(rdata, host);
+  mg_dns_encode_record(reply->io, &rr, name.p, name.len, rdata->buf,
+                       rdata->len);
+  LOG(LL_DEBUG, ("    %d: %.*s SRV %d %.*s:%d", reply->msg->num_answers,
+                 (int) name.len, name.p, ttl, (int) host.len, host.p, port));
+  reply->msg->num_answers++;
 }
 
 // This record contains negative answer for the IPv6 AAAA question
-static void add_nsec_record(const char *name, bool naive_client,
-                            struct mg_dns_reply *reply, struct mbuf *rdata,
-                            int ttl) {
+static void add_nsec_record(struct mg_dns_reply *reply, struct mg_str name,
+                            bool naive_client, int ttl, struct mbuf *rdata) {
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_NSEC_RECORD,
                   (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
   rdata->len = 0;
-  mg_dns_encode_name(rdata, name, strlen(name));
+  mg_dns_encode_name_s(rdata, name);
   mbuf_append(rdata, "\x00\x01\x40", 3); /* Only A record is present */
-  mg_dns_encode_record(reply->io, &rr, name, strlen(name), rdata->buf,
+  mg_dns_encode_record(reply->io, &rr, name.p, name.len, rdata->buf,
                        rdata->len);
+  LOG(LL_DEBUG, ("    %d: %.*s NSEC %d", reply->msg->num_answers,
+                 (int) name.len, name.p, ttl));
   reply->msg->num_answers++;
 }
 
-static void add_a_record(const char *name, bool naive_client,
-                         struct mg_dns_reply *reply, int ttl) {
+static void add_a_record(struct mg_dns_reply *reply, struct mg_str name,
+                         bool naive_client, int ttl, struct mbuf *rdata) {
   uint32_t addr = 0;
   struct mgos_net_ip_info ip_info;
 #ifdef MGOS_HAVE_WIFI
@@ -123,101 +138,104 @@ static void add_a_record(const char *name, bool naive_client,
                                   &ip_info)) {
     addr = ip_info.ip.sin_addr.s_addr;
   }
-#endif
+#else
   (void) ip_info;
+#endif
   if (addr != 0) {
     struct mg_dns_resource_record rr =
         make_dns_rr(MG_DNS_A_RECORD,
                     (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
-    mg_dns_encode_record(reply->io, &rr, name, strlen(name), &addr,
-                         sizeof(addr));
+    mg_dns_encode_record(reply->io, &rr, name.p, name.len, &addr, sizeof(addr));
+    LOG(LL_DEBUG, ("    %d: %.*s A %d %08x", reply->msg->num_answers,
+                   (int) name.len, name.p, ttl, (unsigned int) addr));
     reply->msg->num_answers++;
   }
+  (void) rdata;
 }
 
-static void append_label(struct mbuf *m, struct mg_str key, struct mg_str val) {
-  char buf[256];
-  uint8_t len = snprintf(buf, sizeof(buf), "%.*s=%.*s", (int) key.len, key.p,
-                         (int) val.len, val.p);
-  mbuf_append(m, &len, sizeof(len));
-  mbuf_append(m, buf, len);
-}
-
-static void add_txt_record(const char *name, struct mg_dns_reply *reply,
-                           struct mbuf *rdata, int ttl) {
+static void add_txt_record(struct mg_dns_reply *reply, struct mg_str name,
+                           struct mg_str txt, int ttl, struct mbuf *rdata) {
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_TXT_RECORD, RCLASS_IN_FLUSH, ttl);
-  rdata->len = 0;
-#if !MGOS_DNS_SD_HIDE_ADDITIONAL_INFO
-  append_label(rdata, mg_mk_str("id"),
-               mg_mk_str(mgos_sys_config_get_device_id()));
-  append_label(rdata, mg_mk_str("fw_id"),
-               mg_mk_str(mgos_sys_ro_vars_get_fw_id()));
-  append_label(rdata, mg_mk_str("arch"),
-               mg_mk_str(mgos_sys_ro_vars_get_arch()));
-#endif
-/*
- * TODO(dfrank): probably improve hooks so that we can add functionality
- * here from the rpc-common
- */
-
-#if 0
-  append_label(rdata, mg_mk_str("rpc"),
-               c->rpc.enable ? mg_mk_str("enabled") : mg_mk_str("disabled"));
-#endif
-
-  /* Append extra labels from config */
-  const char *p = mgos_sys_config_get_dns_sd_txt();
-  struct mg_str key, val;
-  while ((p = mg_next_comma_list_entry(p, &key, &val)) != NULL) {
-    append_label(rdata, key, val);
-  }
-
-  mg_dns_encode_record(reply->io, &rr, name, strlen(name), rdata->buf,
-                       rdata->len);
+  mg_dns_encode_record(reply->io, &rr, name.p, name.len, txt.p, txt.len);
+  LOG(LL_DEBUG, ("    %d: %.*s TXT %d %.*s", reply->msg->num_answers,
+                 (int) name.len, name.p, ttl, (int) txt.len, txt.p));
   reply->msg->num_answers++;
+  (void) rdata;
 }
 
-static void add_ptr_record(const char *name, const char *domain,
-                           struct mg_dns_reply *reply, struct mbuf *rdata,
-                           int ttl) {
+static void add_ptr_record(struct mg_dns_reply *reply, struct mg_str name,
+                           struct mg_str target, int ttl, struct mbuf *rdata) {
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_PTR_RECORD, RCLASS_IN_NOFLUSH, ttl);
   rdata->len = 0;
-  mg_dns_encode_name(rdata, domain, strlen(domain));
-  mg_dns_encode_record(reply->io, &rr, name, strlen(name), rdata->buf,
+  LOG(LL_DEBUG, ("    %d: %.*s PTR %d %.*s", reply->msg->num_answers,
+                 (int) name.len, name.p, ttl, (int) target.len, target.p));
+  mg_dns_encode_name_s(rdata, target);
+  mg_dns_encode_record(reply->io, &rr, name.p, name.len, rdata->buf,
                        rdata->len);
   reply->msg->num_answers++;
 }
 
-static void advertise_type(struct mg_dns_reply *reply, bool naive_client,
-                           struct mbuf *rdata) {
-  char host_name[128], service_name[128];
-  int ttl = mgos_sys_config_get_dns_sd_ttl();
-
-  make_service_name(service_name, sizeof(service_name));
-  make_host_name(host_name, sizeof(host_name));
-  add_ptr_record(SD_TYPE_ENUM_NAME, MGOS_DNS_SD_HTTP_TYPE, reply, rdata, ttl);
-  add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, service_name, reply, rdata, ttl);
-  add_srv_record(host_name, service_name, reply, rdata, ttl);
-  add_txt_record(service_name, reply, rdata, ttl);
-  add_a_record(host_name, naive_client, reply, ttl);
-  add_nsec_record(host_name, naive_client, reply, rdata, ttl);
+static struct mg_str get_service(struct mg_str name) {
+  const char *p = mg_strchr(name, '.') + 1;
+  return mg_mk_str_n(p, (name.p + name.len) - p);
 }
 
-static void goodbye_packet(struct mg_dns_reply *reply, bool naive_client,
-                           struct mbuf *rdata) {
-  char host_name[128], service_name[128];
-  int ttl = 0;
+static void add_service_records(struct mg_dns_reply *reply, int ttl,
+                                struct mbuf *rdata) {
+  struct mgos_dns_sd_service_entry *e1 = NULL;
+  SLIST_FOREACH(e1, &s_instances, next) {
+    bool found = false;
+    const struct mgos_dns_sd_service_entry *e2 = NULL;
+    const struct mg_str e1_service = get_service(e1->name);
+    SLIST_FOREACH(e2, &s_instances, next) {
+      if (e2 == e1) break;
+      const struct mg_str e2_service = get_service(e2->name);
+      if (mg_strcasecmp(e1_service, e2_service) == 0) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      add_ptr_record(reply, mg_mk_str(SD_TYPE_ENUM_NAME), e1_service, ttl,
+                     rdata);
+    }
+  }
+}
 
-  make_service_name(service_name, sizeof(service_name));
-  make_host_name(host_name, sizeof(host_name));
-  add_ptr_record(SD_TYPE_ENUM_NAME, MGOS_DNS_SD_HTTP_TYPE, reply, rdata, ttl);
-  add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, service_name, reply, rdata, ttl);
-  add_srv_record(host_name, service_name, reply, rdata, ttl);
-  add_txt_record(service_name, reply, rdata, ttl);
-  add_a_record(host_name, naive_client, reply, ttl);
-  add_nsec_record(host_name, naive_client, reply, rdata, ttl);
+static void add_instance_records(struct mg_dns_reply *reply,
+                                 struct mgos_dns_sd_service_entry *e, bool ptr,
+                                 bool srv, bool txt, int ttl,
+                                 struct mbuf *rdata) {
+  const struct mg_str e_service = get_service(e->name);
+  /* service PTR instance */
+  if (ptr && !(e->flags & F_PTR_SENT)) {
+    add_ptr_record(reply, e_service, e->name, ttl, rdata);
+    e->flags |= F_PTR_SENT;
+  }
+  /* instance SRV host */
+  if (srv && !(e->flags & F_SRV_SENT)) {
+    add_srv_record(reply, e->name, s_host_name, e->port, ttl, rdata);
+    e->flags |= F_SRV_SENT;
+  }
+  /* instance TXT txt */
+  if (txt && !(e->flags & F_TXT_SENT)) {
+    add_txt_record(reply, e->name, e->txt, ttl, rdata);
+    e->flags |= F_TXT_SENT;
+  }
+}
+
+static void advertise(struct mg_dns_reply *reply, bool naive_client, int ttl,
+                      struct mbuf *rdata) {
+  add_service_records(reply, ttl, rdata);
+  struct mgos_dns_sd_service_entry *e = NULL;
+  SLIST_FOREACH(e, &s_instances, next) {
+    add_instance_records(reply, e, true, true, true, ttl, rdata);
+  }
+  /* host A ip */
+  add_a_record(reply, s_host_name, naive_client, ttl, rdata);
+  add_nsec_record(reply, s_host_name, naive_client, ttl, rdata);
 }
 
 static void handler(struct mg_connection *nc, int ev, void *ev_data,
@@ -233,36 +251,33 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
       struct mbuf reply_mbuf;
       /* the reply goes either to the sender or to a multicast dest */
       struct mg_connection *reply_conn = nc;
-      char host[128], srv[128];
       char *peer = inet_ntoa(nc->sa.sin.sin_addr);
       int ttl = mgos_sys_config_get_dns_sd_ttl();
-      LOG(LL_DEBUG, ("---- DNS packet from %s (%d questions, %d answers)", peer,
+      LOG(LL_DEBUG, ("-- DNS packet from %s (%d questions, %d answers)", peer,
                      msg->num_questions, msg->num_answers));
-      make_host_name(host, sizeof(host));
-      make_service_name(srv, sizeof(srv));
-
       mbuf_init(&rdata, 0);
       mbuf_init(&reply_mbuf, 512);
       int tmp = msg->num_questions;
       msg->num_questions = 0;
       reply = mg_dns_create_reply(&reply_mbuf, msg);
       msg->num_questions = tmp;
-      bool question_a_answered = 0; /* MG_DNS_A_RECORD answer is sent */
+      reset_flags();
+      bool need_a = false, have_a = false;
       /* Additional heuristic: multicast queries should use ID of 0.
        * If ID is not 0, we take it to indicate a naive client trying to
        * use multicast address for queries, i.e. dig @224.0.0.251 */
       bool naive_client = (msg->transaction_id != 0);
 
       for (i = 0; i < msg->num_questions; i++) {
-        char name[256];
+        char name_buf[256];
         struct mg_dns_resource_record *rr = &msg->questions[i];
-        mg_dns_uncompress_name(msg, &rr->name, name, sizeof(name) - 1);
+        mg_dns_uncompress_name(msg, &rr->name, name_buf, sizeof(name_buf) - 1);
+        struct mg_str name = mg_mk_str(name_buf);
         int is_unicast = (rr->rclass & MGOS_MDNS_QUERY_UNICAST) || naive_client;
 
-        LOG(LL_DEBUG, ("  -- Q type %d name %s (%s) from %s, unicast: %d",
-                       rr->rtype, name, (is_unicast ? "QU" : "QM"), peer,
+        LOG(LL_DEBUG, ("  Q type %d name %.*s (%s), unicast: %d", rr->rtype,
+                       (int) name.len, name.p, (is_unicast ? "QU" : "QM"),
                        (rr->rclass & MGOS_MDNS_QUERY_UNICAST) != 0));
-
         /*
          * If there is at least one question that requires a multicast answer
          * the whole reply goes to a multicast destination
@@ -271,7 +286,6 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
           /* our listener connection has the mcast address in its nc->sa */
           reply_conn = nc->listener;
         }
-
         /*
          * MSB in rclass is used to mean QU/QM in queries and cache flush in
          * reply. Set cache flush bit by default; enumeration replies will
@@ -280,44 +294,47 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
         rr->rclass |= MGOS_MDNS_CACHE_FLUSH;
 
         if (rr->rtype == MG_DNS_PTR_RECORD &&
-            (strcasecmp(name, SD_TYPE_ENUM_NAME) == 0 ||
-             strcasecmp(name, MGOS_DNS_SD_HTTP_TYPE_FULL) == 0)) {
-          advertise_type(&reply, naive_client, &rdata);
-        } else if (rr->rtype == MG_DNS_PTR_RECORD &&
-                   strcasecmp(name, srv) == 0) {
-          add_ptr_record(MGOS_DNS_SD_HTTP_TYPE_FULL, name, &reply, &rdata, ttl);
-          if (!question_a_answered) {
-            add_a_record(host, naive_client, &reply, ttl);
-            if (!naive_client)
-              add_nsec_record(host, false, &reply, &rdata, ttl);
-            question_a_answered++;
-          }
-        } else if (rr->rtype == MG_DNS_SRV_RECORD &&
-                   strcasecmp(name, srv) == 0) {
-          add_srv_record(host, srv, &reply, &rdata, ttl);
-        } else if (rr->rtype == MG_DNS_TXT_RECORD &&
-                   strcasecmp(name, srv) == 0) {
-          add_txt_record(name, &reply, &rdata, ttl);
-        } else if (!question_a_answered && (rr->rtype == MG_DNS_A_RECORD ||
-                                            rr->rtype == MG_DNS_AAAA_RECORD) &&
-                   strcasecmp(host, name) == 0) {
-          add_a_record(host, naive_client, &reply, ttl);
-          if (!naive_client) add_nsec_record(host, false, &reply, &rdata, ttl);
-          question_a_answered++;
+            mg_strcasecmp(name, mg_mk_str(SD_TYPE_ENUM_NAME)) == 0) {
+          advertise(&reply, naive_client, mgos_sys_config_get_dns_sd_ttl(),
+                    &rdata);
+          have_a = true;
+        } else if ((rr->rtype == MG_DNS_A_RECORD ||
+                    rr->rtype == MG_DNS_AAAA_RECORD) &&
+                   mg_strcasecmp(name, s_host_name) == 0) {
+          need_a = true;
         } else {
-          LOG(LL_DEBUG, (" --- ignoring: name=%s, type=%d", name, rr->rtype));
+          struct mgos_dns_sd_service_entry *e = NULL;
+          SLIST_FOREACH(e, &s_instances, next) {
+            if (mg_strcasecmp(name, e->name) == 0) {
+              bool need_srv = (rr->rtype == MG_DNS_SRV_RECORD);
+              bool need_txt = (rr->rtype == MG_DNS_TXT_RECORD);
+              add_instance_records(&reply, e, false, need_srv, need_txt, ttl,
+                                   &rdata);
+              need_a = true;
+            } else if (rr->rtype == MG_DNS_PTR_RECORD) {
+              struct mg_str e_service = get_service(e->name);
+              if (mg_strcasecmp(name, e_service) == 0) {
+                add_instance_records(&reply, e, true, true, true, ttl, &rdata);
+                need_a = true;
+              }
+            }
+          }
         }
+      }
+      if (need_a && !have_a) {
+        add_a_record(&reply, s_host_name, naive_client, ttl, &rdata);
+        add_nsec_record(&reply, s_host_name, naive_client, ttl, &rdata);
       }
 
       if (msg->num_answers > 0) {
-        LOG(LL_DEBUG, ("sending reply as %s, size %d",
+        LOG(LL_DEBUG, ("  %c %d answers, %s, size %d",
+                       (reply.msg->num_answers > 0 ? '+' : '-'),
+                       (int) reply.msg->num_answers,
                        (reply_conn == nc ? "unicast" : "multicast"),
                        (int) reply.io->len));
         msg->num_questions = 0;
         msg->flags = 0x8400; /* Authoritative answer */
         mg_dns_send_reply(reply_conn, &reply);
-      } else {
-        LOG(LL_DEBUG, ("not sending reply, closing"));
       }
       mbuf_free(&rdata);
       mbuf_free(&reply_mbuf);
@@ -328,38 +345,20 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
   (void) user_data;
 }
 
-static void dns_sd_advertise(struct mg_connection *c) {
+static void dns_sd_advertise(struct mg_connection *c, int ttl) {
   struct mbuf mbuf1, mbuf2;
   struct mg_dns_message msg;
   struct mg_dns_reply reply;
-  LOG(LL_DEBUG, ("advertising types"));
+  LOG(LL_DEBUG, ("advertising, ttl=%d", ttl));
   mbuf_init(&mbuf1, 0);
   mbuf_init(&mbuf2, 0);
   memset(&msg, 0, sizeof(msg));
   msg.flags = 0x8400;
   reply = mg_dns_create_reply(&mbuf1, &msg);
-  advertise_type(&reply, false /* naive_client */, &mbuf2);
+  reset_flags();
+  advertise(&reply, false /* naive_client */, ttl, &mbuf2);
   if (msg.num_answers > 0) {
     LOG(LL_DEBUG, ("sending adv as M, size %d", (int) reply.io->len));
-    mg_dns_send_reply(c, &reply);
-  }
-  mbuf_free(&mbuf1);
-  mbuf_free(&mbuf2);
-}
-
-static void dns_sd_goodbye(struct mg_connection *c) {
-  struct mbuf mbuf1, mbuf2;
-  struct mg_dns_message msg;
-  struct mg_dns_reply reply;
-  LOG(LL_DEBUG, ("sending goodbye packet"));
-  mbuf_init(&mbuf1, 0);
-  mbuf_init(&mbuf2, 0);
-  memset(&msg, 0, sizeof(msg));
-  msg.flags = 0x8400;
-  reply = mg_dns_create_reply(&mbuf1, &msg);
-  goodbye_packet(&reply, false /* naive_client */, &mbuf2);
-  if (msg.num_answers > 0) {
-    LOG(LL_DEBUG, ("sending goodbye packet, size %d", (int) reply.io->len));
     mg_dns_send_reply(c, &reply);
   }
   mbuf_free(&mbuf1);
@@ -375,24 +374,77 @@ static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
   struct mg_connection *c = mgos_mdns_get_listener();
   LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", ev, arg, c));
   if (ev == MGOS_NET_EV_IP_ACQUIRED && c != NULL) {
-    dns_sd_advertise(c);
+    mgos_dns_sd_advertise();
     mgos_set_timer(1000, 0, dns_sd_adv_timer_cb, NULL); /* By RFC, repeat */
   }
   (void) evd;
 }
 
 const char *mgos_dns_sd_get_host_name(void) {
-  return s_host_name;
+  return s_host_name.p;
 }
 
 void mgos_dns_sd_advertise(void) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  if (c != NULL) dns_sd_advertise(c);
+  if (c != NULL) dns_sd_advertise(c, mgos_sys_config_get_dns_sd_ttl());
 }
 
 void mgos_dns_sd_goodbye(void) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  if (c != NULL) dns_sd_goodbye(c);
+  if (c != NULL) dns_sd_advertise(c, 0);
+}
+
+static void mgos_dns_sd_service_entry_free(
+    struct mgos_dns_sd_service_entry *e) {
+  if (e == NULL) return;
+  mg_strfree(&e->name);
+  mg_strfree(&e->txt);
+  free(e);
+}
+
+bool mgos_dns_sd_add_service_instance(
+    const char *instance, const char *proto, int port,
+    const struct mgos_dns_sd_txt_entry *txt_entries) {
+  char buf[256] = {0}, *p = buf;
+  struct mgos_dns_sd_service_entry *e = NULL;
+  bool res = false, is_new = false;
+  int name_len =
+      snprintf(buf, sizeof(buf) - 1, "%s.%s.%s", instance, proto, SD_DOMAIN);
+  struct mg_str name = MG_MK_STR_N(buf, name_len);
+
+  const struct mgos_dns_sd_txt_entry *te;
+  SLIST_FOREACH(e, &s_instances, next) {
+    if (e->port == port && mg_strcasecmp(e->name, name) == 0) break;
+  };
+  if (e == NULL) {
+    e = (struct mgos_dns_sd_service_entry *) calloc(1, sizeof(*e));
+    if (e == NULL) goto out;
+    e->name = mg_strdup(name);
+    e->port = port;
+    if (e->name.p == NULL) goto out;
+    is_new = true;
+  }
+  for (te = txt_entries; te != NULL && te->key != NULL; te++) {
+    if (te->value == NULL) continue;
+    int p_size = sizeof(buf) - (p - buf) - 1;
+    if (p_size <= 0) goto out;
+    uint8_t len = snprintf(p + 1, p_size, "%s=%s", te->key, te->value);
+    *p = len;
+    p += len + 1;
+  }
+  const struct mg_str txt = MG_MK_STR_N(buf, p - buf);
+  e->txt = mg_strdup(txt);
+  res = (e->txt.len == txt.len);
+
+out:
+  if (is_new) {
+    if (res) {
+      SLIST_INSERT_HEAD(&s_instances, e, next);
+    } else {
+      mgos_dns_sd_service_entry_free(e);
+    }
+  }
+  return res;
 }
 
 /* Initialize the DNS-SD subsystem */
@@ -424,12 +476,66 @@ bool mgos_dns_sd_init(void) {
     LOG(LL_ERROR, ("dns_sd.host_name and device.id are not set"));
     return false;
   }
-  mg_asprintf(&s_host_name, 0, "%s%s", hn, SD_DOMAIN);
-  mgos_expand_mac_address_placeholders(s_host_name);
-  for (size_t i = 0; i < strlen(s_host_name) - sizeof(SD_DOMAIN); i++) {
-    if (!isalnum((int) s_host_name[i])) s_host_name[i] = '-';
+  s_host_name.len =
+      mg_asprintf((char **) &s_host_name.p, 0, "%s.%s", hn, SD_DOMAIN);
+  mgos_expand_mac_address_placeholders((char *) s_host_name.p);
+  for (size_t i = 0; i < s_host_name.len - sizeof(SD_DOMAIN); i++) {
+    if (!isalnum((int) s_host_name.p[i])) ((char *) s_host_name.p)[i] = '-';
   }
-  LOG(LL_INFO, ("MDNS initialized, host %s, ttl %d", s_host_name,
-                mgos_sys_config_get_dns_sd_ttl()));
+#ifdef MGOS_HAVE_HTTP_SERVER
+  struct mg_connection *lc = mgos_get_sys_http_server();
+  if (lc != NULL) {
+    int n = 0;
+    struct mgos_dns_sd_txt_entry *txt = NULL;
+#if !MGOS_DNS_SD_HIDE_ADDITIONAL_INFO
+    const struct mgos_dns_sd_txt_entry txt_id = {
+        .key = "id",
+        .value = mgos_sys_config_get_device_id(),
+    };
+    const struct mgos_dns_sd_txt_entry txt_fw_id = {
+        .key = "fw_id",
+        .value = mgos_sys_ro_vars_get_fw_id(),
+    };
+    const struct mgos_dns_sd_txt_entry txt_arch = {
+        .key = "arch",
+        .value = mgos_sys_ro_vars_get_arch(),
+    };
+    txt = realloc(txt, (n + 4) * sizeof(*txt));
+    if (txt == NULL) return false;
+    txt[0] = txt_id;
+    txt[1] = txt_fw_id;
+    txt[2] = txt_arch;
+    n += 3;
+#endif
+    // Append extra labels from config.
+    char *extra_txt = NULL;
+    if (mgos_sys_config_get_dns_sd_txt() != NULL) {
+      extra_txt = strdup(mgos_sys_config_get_dns_sd_txt());
+      const char *p = extra_txt;
+      struct mg_str key, val;
+      while ((p = mg_next_comma_list_entry(p, &key, &val)) != NULL) {
+        ((char *) key.p)[key.len] = '\0';
+        ((char *) val.p)[val.len] = '\0';
+        txt = realloc(txt, (n + 2) * sizeof(*txt));
+        if (txt == NULL) return false;
+        txt[n].key = key.p;
+        txt[n].value = val.p;
+        n++;
+      }
+    }
+    if (txt != NULL) txt[n].key = NULL;
+    // Use instance = host name.
+    const char *p = mg_strchr(s_host_name, '.');
+    struct mg_str inst =
+        mg_strdup_nul(mg_mk_str_n(s_host_name.p, p - s_host_name.p));
+    mgos_dns_sd_add_service_instance(inst.p, "_http._tcp",
+                                     ntohs(lc->sa.sin.sin_port), txt);
+    mg_strfree(&inst);
+    free(extra_txt);
+    free(txt);
+  }
+#endif /* MGOS_HAVE_HTTP_SERVER */
+  LOG(LL_INFO, ("MDNS initialized, host %.*s, ttl %d", (int) s_host_name.len,
+                s_host_name.p, mgos_sys_config_get_dns_sd_ttl()));
   return true;
 }
