@@ -433,6 +433,7 @@ bool mgos_dns_sd_add_service_instance(
     p += len + 1;
   }
   const struct mg_str txt = MG_MK_STR_N(buf, p - buf);
+  mg_strfree(&e->txt);
   e->txt = mg_strdup(txt);
   res = (e->txt.len == txt.len);
 
@@ -443,6 +444,9 @@ out:
     } else {
       mgos_dns_sd_service_entry_free(e);
     }
+  }
+  if (res) {
+    mgos_dns_sd_advertise();
   }
   return res;
 }
