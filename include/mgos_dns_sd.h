@@ -19,6 +19,8 @@
 
 #include <stdbool.h>
 
+#include "common/mg_str.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,7 +33,7 @@ const char *mgos_dns_sd_get_host_name(void);
 /* TXT record key/value entry */
 struct mgos_dns_sd_txt_entry {
   const char *key;
-  const char *value;
+  struct mg_str value;
 };
 
 /*
@@ -43,14 +45,14 @@ struct mgos_dns_sd_txt_entry {
  * Example (for Apple HAP):
  *
  * const struct mgos_dns_sd_txt_entry gizmo_txt[] = {
- *     {.key = "c#", .value = "1"},
- *     {.key = "ff", .value = "0"},
- *     {.key = "pv", .value = "1.0"},
- *     {.key = "id", .value = "11:22:33:44:55:66"},
- *     {.key = "md", .value = "Fancy Gizmo 9000"},
- *     {.key = "s#", .value = "1"},
- *     {.key = "sf", .value = "1"},
- *     {.key = "ci", .value = "8"},  // Switch
+ *     {.key = "c#", .value = MG_MK_STR("1")},
+ *     {.key = "ff", .value = MG_MK_STR("0")},
+ *     {.key = "pv", .value = MG_MK_STR("1.0")},
+ *     {.key = "id", .value = MG_MK_STR("11:22:33:44:55:66")},
+ *     {.key = "md", .value = MG_MK_STR("Fancy Gizmo 9000")},
+ *     {.key = "s#", .value = MG_MK_STR("1")},
+ *     {.key = "sf", .value = MG_MK_STR("1")},
+ *     {.key = "ci", .value = MG_MK_STR("8")},  // Switch
  *     {.key = NULL},
  * };
  * mgos_dns_sd_add_service_instance("gizmo9000", "_hap._tcp", 8080, gizmo_txt);
@@ -58,6 +60,10 @@ struct mgos_dns_sd_txt_entry {
 bool mgos_dns_sd_add_service_instance(
     const char *instance, const char *proto, int port,
     const struct mgos_dns_sd_txt_entry *txt_entries);
+
+/* Stop advertising the specified instance. */
+bool mgos_dns_sd_remove_service_instance(
+    const char *instance, const char *proto, int port);
 
 /* Send a DNS-SD advertisement message now. */
 void mgos_dns_sd_advertise(void);

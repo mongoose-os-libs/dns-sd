@@ -425,10 +425,10 @@ bool mgos_dns_sd_add_service_instance(
     is_new = true;
   }
   for (te = txt_entries; te != NULL && te->key != NULL; te++) {
-    if (te->value == NULL) continue;
     int p_size = sizeof(buf) - (p - buf) - 1;
     if (p_size <= 0) goto out;
-    uint8_t len = snprintf(p + 1, p_size, "%s=%s", te->key, te->value);
+    uint8_t len = snprintf(p + 1, p_size, "%s=%.*s", te->key,
+                           (int) te->value.len, te->value.p);
     *p = len;
     p += len + 1;
   }
@@ -449,6 +449,23 @@ out:
     mgos_dns_sd_advertise();
   }
   return res;
+}
+
+bool mgos_dns_sd_remove_service_instance(const char *instance,
+                                         const char *proto, int port) {
+  char buf[256] = {0};
+  int name_len =
+      snprintf(buf, sizeof(buf) - 1, "%s.%s.%s", instance, proto, SD_DOMAIN);
+  struct mg_str name = MG_MK_STR_N(buf, name_len);
+
+  struct mgos_dns_sd_service_entry *e;
+  SLIST_FOREACH(e, &s_instances, next) {
+    if (e->port == port && mg_strcasecmp(e->name, name) == 0) break;
+  };
+  if (e == NULL) return false;
+  SLIST_REMOVE(&s_instances, e, mgos_dns_sd_service_entry, next);
+  // TODO: Send a good-bye packet for the associated records.
+  return true;
 }
 
 /* Initialize the DNS-SD subsystem */
@@ -494,15 +511,15 @@ bool mgos_dns_sd_init(void) {
 #if !MGOS_DNS_SD_HIDE_ADDITIONAL_INFO
     const struct mgos_dns_sd_txt_entry txt_id = {
         .key = "id",
-        .value = mgos_sys_config_get_device_id(),
+        .value = mg_mk_str(mgos_sys_config_get_device_id()),
     };
     const struct mgos_dns_sd_txt_entry txt_fw_id = {
         .key = "fw_id",
-        .value = mgos_sys_ro_vars_get_fw_id(),
+        .value = mg_mk_str(mgos_sys_ro_vars_get_fw_id()),
     };
     const struct mgos_dns_sd_txt_entry txt_arch = {
         .key = "arch",
-        .value = mgos_sys_ro_vars_get_arch(),
+        .value = mg_mk_str(mgos_sys_ro_vars_get_arch()),
     };
     txt = realloc(txt, (n + 4) * sizeof(*txt));
     if (txt == NULL) return false;
@@ -523,7 +540,7 @@ bool mgos_dns_sd_init(void) {
         txt = realloc(txt, (n + 2) * sizeof(*txt));
         if (txt == NULL) return false;
         txt[n].key = key.p;
-        txt[n].value = val.p;
+        txt[n].value = val;
         n++;
       }
     }
