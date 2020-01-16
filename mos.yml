@@ -5,9 +5,6 @@ version: 1.1.0
 
 platforms: ["esp32", "esp8266"]
 
-sources:
-  - src
-
 includes:
   - include
 
@@ -19,17 +16,22 @@ config_schema:
   - ["dns_sd.ttl", "i", 120, {title: "Time-to-live in seconds"}]
 
 libs:
-  - origin: https://github.com/mongoose-os-libs/http-server
+  - origin: https://github.com/mongoose-os-libs/mongoose
 
 init_after:
   - ethernet
   - http-server
   - wifi
 
-cdefs:
-  MG_ENABLE_DNS: 1
-  MG_ENABLE_DNS_SERVER: 1
-  MGOS_DNS_SD_HIDE_ADDITIONAL_INFO: 0
+conds:
+  - when: mos.platform != "ubuntu"
+    apply:
+      sources:
+        - src/mongoose
+      cdefs:
+        MG_ENABLE_DNS: 1
+        MG_ENABLE_DNS_SERVER: 1
+        MGOS_DNS_SD_HIDE_ADDITIONAL_INFO: 0
 
 tags:
   - c

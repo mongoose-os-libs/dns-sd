@@ -29,11 +29,12 @@
 #include <stdlib.h>
 #include <strings.h>
 
-#include "mgos_http_server.h"
-
 #include "common/cs_dbg.h"
 #include "common/platform.h"
 #include "common/queue.h"
+#ifdef MGOS_HAVE_HTTP_SERVER
+#include "mgos_http_server.h"
+#endif
 #include "mgos_mdns_internal.h"
 #include "mgos_mongoose.h"
 #include "mgos_net.h"
@@ -480,10 +481,6 @@ bool mgos_dns_sd_init(void) {
     return true;
   }
 #endif
-  if (!mgos_sys_config_get_http_enable()) {
-    LOG(LL_ERROR, ("MDNS wants HTTP enabled"));
-    return true;
-  }
   if (!mgos_mdns_init()) return false;
   mgos_mdns_add_handler(handler, NULL);
   mgos_event_add_group_handler(MGOS_EVENT_GRP_NET, dns_sd_net_ev_handler, NULL);
