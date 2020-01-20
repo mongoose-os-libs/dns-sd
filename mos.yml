@@ -3,7 +3,7 @@ description: Implements DNS-SD protocol
 type: lib
 version: 1.1.0
 
-platforms: ["esp32", "esp8266"]
+platforms: ["esp32", "esp8266", "ubuntu"]
 
 includes:
   - include
@@ -20,7 +20,6 @@ libs:
 
 init_after:
   - ethernet
-  - http-server
   - wifi
 
 conds:
@@ -32,6 +31,11 @@ conds:
         MG_ENABLE_DNS: 1
         MG_ENABLE_DNS_SERVER: 1
         MGOS_DNS_SD_HIDE_ADDITIONAL_INFO: 0
+
+  - when: mos.platform == "ubuntu"
+    apply:
+      sources:
+        - src/avahi
 
 tags:
   - c

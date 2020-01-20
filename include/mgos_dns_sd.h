@@ -58,12 +58,12 @@ struct mgos_dns_sd_txt_entry {
  * mgos_dns_sd_add_service_instance("gizmo9000", "_hap._tcp", 8080, gizmo_txt);
  */
 bool mgos_dns_sd_add_service_instance(
-    const char *instance, const char *proto, int port,
+    const char *name, const char *proto, int port,
     const struct mgos_dns_sd_txt_entry *txt_entries);
 
 /* Stop advertising the specified instance. */
-bool mgos_dns_sd_remove_service_instance(
-    const char *instance, const char *proto, int port);
+bool mgos_dns_sd_remove_service_instance(const char *instance,
+                                         const char *proto, int port);
 
 /* Send a DNS-SD advertisement message now. */
 void mgos_dns_sd_advertise(void);

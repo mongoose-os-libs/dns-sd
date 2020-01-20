@@ -32,13 +32,9 @@
 #include "common/cs_dbg.h"
 #include "common/platform.h"
 #include "common/queue.h"
-#ifdef MGOS_HAVE_HTTP_SERVER
-#include "mgos_http_server.h"
-#endif
 #include "mgos_mdns_internal.h"
 #include "mgos_mongoose.h"
 #include "mgos_net.h"
-#include "mgos_ro_vars.h"
 #include "mgos_sys_config.h"
 #include "mgos_timers.h"
 #include "mongoose.h"
@@ -404,23 +400,23 @@ static void mgos_dns_sd_service_entry_free(
 }
 
 bool mgos_dns_sd_add_service_instance(
-    const char *instance, const char *proto, int port,
+    const char *name, const char *proto, int port,
     const struct mgos_dns_sd_txt_entry *txt_entries) {
   char buf[256] = {0}, *p = buf;
   struct mgos_dns_sd_service_entry *e = NULL;
   bool res = false, is_new = false;
-  int name_len =
-      snprintf(buf, sizeof(buf) - 1, "%s.%s.%s", instance, proto, SD_DOMAIN);
-  struct mg_str name = MG_MK_STR_N(buf, name_len);
+  int fqdn_len =
+      snprintf(buf, sizeof(buf) - 1, "%s.%s.%s", name, proto, SD_DOMAIN);
+  struct mg_str fqdn = MG_MK_STR_N(buf, fqdn_len);
 
   const struct mgos_dns_sd_txt_entry *te;
   SLIST_FOREACH(e, &s_instances, next) {
-    if (e->port == port && mg_strcasecmp(e->name, name) == 0) break;
+    if (e->port == port && mg_strcasecmp(e->name, fqdn) == 0) break;
   };
   if (e == NULL) {
     e = (struct mgos_dns_sd_service_entry *) calloc(1, sizeof(*e));
     if (e == NULL) goto out;
-    e->name = mg_strdup(name);
+    e->name = mg_strdup(fqdn);
     e->port = port;
     if (e->name.p == NULL) goto out;
     is_new = true;
@@ -452,16 +448,16 @@ out:
   return res;
 }
 
-bool mgos_dns_sd_remove_service_instance(const char *instance,
-                                         const char *proto, int port) {
+bool mgos_dns_sd_remove_service_instance(const char *name, const char *proto,
+                                         int port) {
   char buf[256] = {0};
-  int name_len =
-      snprintf(buf, sizeof(buf) - 1, "%s.%s.%s", instance, proto, SD_DOMAIN);
-  struct mg_str name = MG_MK_STR_N(buf, name_len);
+  int fqdn_len =
+      snprintf(buf, sizeof(buf) - 1, "%s.%s.%s", name, proto, SD_DOMAIN);
+  struct mg_str fqdn = MG_MK_STR_N(buf, fqdn_len);
 
   struct mgos_dns_sd_service_entry *e;
   SLIST_FOREACH(e, &s_instances, next) {
-    if (e->port == port && mg_strcasecmp(e->name, name) == 0) break;
+    if (e->port == port && mg_strcasecmp(e->name, fqdn) == 0) break;
   };
   if (e == NULL) return false;
   SLIST_REMOVE(&s_instances, e, mgos_dns_sd_service_entry, next);
@@ -500,60 +496,7 @@ bool mgos_dns_sd_init(void) {
   for (size_t i = 0; i < s_host_name.len - sizeof(SD_DOMAIN); i++) {
     if (!isalnum((int) s_host_name.p[i])) ((char *) s_host_name.p)[i] = '-';
   }
-#ifdef MGOS_HAVE_HTTP_SERVER
-  struct mg_connection *lc = mgos_get_sys_http_server();
-  if (lc != NULL) {
-    int n = 0;
-    struct mgos_dns_sd_txt_entry *txt = NULL;
-#if !MGOS_DNS_SD_HIDE_ADDITIONAL_INFO
-    const struct mgos_dns_sd_txt_entry txt_id = {
-        .key = "id",
-        .value = mg_mk_str(mgos_sys_config_get_device_id()),
-    };
-    const struct mgos_dns_sd_txt_entry txt_fw_id = {
-        .key = "fw_id",
-        .value = mg_mk_str(mgos_sys_ro_vars_get_fw_id()),
-    };
-    const struct mgos_dns_sd_txt_entry txt_arch = {
-        .key = "arch",
-        .value = mg_mk_str(mgos_sys_ro_vars_get_arch()),
-    };
-    txt = realloc(txt, (n + 4) * sizeof(*txt));
-    if (txt == NULL) return false;
-    txt[0] = txt_id;
-    txt[1] = txt_fw_id;
-    txt[2] = txt_arch;
-    n += 3;
-#endif
-    // Append extra labels from config.
-    char *extra_txt = NULL;
-    if (mgos_sys_config_get_dns_sd_txt() != NULL) {
-      extra_txt = strdup(mgos_sys_config_get_dns_sd_txt());
-      const char *p = extra_txt;
-      struct mg_str key, val;
-      while ((p = mg_next_comma_list_entry(p, &key, &val)) != NULL) {
-        ((char *) key.p)[key.len] = '\0';
-        ((char *) val.p)[val.len] = '\0';
-        txt = realloc(txt, (n + 2) * sizeof(*txt));
-        if (txt == NULL) return false;
-        txt[n].key = key.p;
-        txt[n].value = val;
-        n++;
-      }
-    }
-    if (txt != NULL) txt[n].key = NULL;
-    // Use instance = host name.
-    const char *p = mg_strchr(s_host_name, '.');
-    struct mg_str inst =
-        mg_strdup_nul(mg_mk_str_n(s_host_name.p, p - s_host_name.p));
-    mgos_dns_sd_add_service_instance(inst.p, "_http._tcp",
-                                     ntohs(lc->sa.sin.sin_port), txt);
-    mg_strfree(&inst);
-    free(extra_txt);
-    free(txt);
-  }
-#endif /* MGOS_HAVE_HTTP_SERVER */
-  LOG(LL_INFO, ("MDNS initialized, host %.*s, ttl %d", (int) s_host_name.len,
+  LOG(LL_INFO, ("DNS-SD initialized, host %.*s, ttl %d", (int) s_host_name.len,
                 s_host_name.p, mgos_sys_config_get_dns_sd_ttl()));
   return true;
 }
