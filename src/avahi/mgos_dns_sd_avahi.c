@@ -87,7 +87,10 @@ static void avahi_entry_group_callback(AvahiEntryGroup *g,
       abort();
       break;
     case AVAHI_ENTRY_GROUP_UNCOMMITED:
+      LOG(LL_DEBUG, ("%s.%s: uncommitted", get_actual_name(e), e->proto));
+      break;
     case AVAHI_ENTRY_GROUP_REGISTERING:
+      LOG(LL_DEBUG, ("%s.%s: registering", get_actual_name(e), e->proto));
       break;
   }
 }
