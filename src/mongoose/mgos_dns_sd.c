@@ -470,7 +470,8 @@ bool mgos_dns_sd_init(void) {
   if (!mgos_sys_config_get_dns_sd_enable()) return true;
 #ifdef MGOS_HAVE_WIFI
   if (mgos_sys_config_get_wifi_ap_enable() &&
-      mgos_sys_config_get_wifi_sta_enable()) {
+      mgos_sys_config_get_wifi_sta_enable() &&
+      mgos_sys_config_get_wifi_ap_keep_enabled()) {
     /* Reason: multiple interfaces. More work is required to make sure
      * requests and responses are correctly plumbed to the right interface. */
     LOG(LL_ERROR, ("MDNS does not work in AP+STA mode"));
