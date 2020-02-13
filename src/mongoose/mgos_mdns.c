@@ -99,7 +99,9 @@ bool mgos_mdns_init(void) {
   s_listening_mdns_conn->sa.sin.sin_port = htons(5353);
   inet_aton(MDNS_MCAST_GROUP, &s_listening_mdns_conn->sa.sin.sin_addr);
 
-  mgos_mdns_hal_join_group(MDNS_MCAST_GROUP);
+  if (!mgos_sys_config_get_dns_sd_adv_only()) {
+    mgos_mdns_hal_join_group(MDNS_MCAST_GROUP);
+  }
 
   return true;
 }
