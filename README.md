@@ -1,8 +1,8 @@
 # DNS-SD/Bonjour protocol support library
 
-By default, advertises HTTP server (if enabled).
+By default, advertises the HTTP server (if enabled).
 
-Additional insances can be added by user's application, example (for Apple HAP):
+Additional instances can be added by the user's application, example (for Apple HAP):
 
 ```c
 const struct mgos_dns_sd_txt_entry gizmo_txt[] = {
