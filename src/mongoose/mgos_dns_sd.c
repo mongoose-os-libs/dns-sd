@@ -369,12 +369,12 @@ static void dns_sd_adv_timer_cb(void *arg) {
 
 static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  LOG(LL_DEBUG, ("ev %d, data %p, mdns_listener %p", ev, arg, c));
-  if (ev == MGOS_NET_EV_IP_ACQUIRED && c != NULL) {
-    mgos_dns_sd_advertise();
-    mgos_set_timer(1000, 0, dns_sd_adv_timer_cb, NULL); /* By RFC, repeat */
-  }
+  LOG(LL_DEBUG, ("ev %d, mdns_listener %p", ev, c));
+  if (c == NULL) return;
+  mgos_dns_sd_advertise();
+  mgos_set_timer(1000, 0, dns_sd_adv_timer_cb, NULL); /* By RFC, repeat */
   (void) evd;
+  (void) arg;
 }
 
 const char *mgos_dns_sd_get_host_name(void) {
@@ -480,7 +480,10 @@ bool mgos_dns_sd_init(void) {
 #endif
   if (!mgos_mdns_init()) return false;
   mgos_mdns_add_handler(handler, NULL);
-  mgos_event_add_group_handler(MGOS_EVENT_GRP_NET, dns_sd_net_ev_handler, NULL);
+  mgos_event_add_handler(MGOS_NET_EV_IP_ACQUIRED, dns_sd_net_ev_handler, NULL);
+#ifdef MGOS_HAVE_WIFI
+  mgos_event_add_handler(MGOS_WIFI_EV_AP_STA_CONNECTED, dns_sd_net_ev_handler, NULL);
+#endif
   mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1,
                  MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
   const char *hn = mgos_sys_config_get_dns_sd_host_name();
