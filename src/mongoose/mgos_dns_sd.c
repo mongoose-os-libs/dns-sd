@@ -482,7 +482,8 @@ bool mgos_dns_sd_init(void) {
   mgos_mdns_add_handler(handler, NULL);
   mgos_event_add_handler(MGOS_NET_EV_IP_ACQUIRED, dns_sd_net_ev_handler, NULL);
 #ifdef MGOS_HAVE_WIFI
-  mgos_event_add_handler(MGOS_WIFI_EV_AP_STA_CONNECTED, dns_sd_net_ev_handler, NULL);
+  mgos_event_add_handler(MGOS_WIFI_EV_AP_STA_CONNECTED, dns_sd_net_ev_handler,
+                         NULL);
 #endif
   mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1,
                  MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);

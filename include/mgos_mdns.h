@@ -22,8 +22,7 @@
  * about the multicast DNS.
  */
 
-#ifndef CS_MOS_LIBS_DNS_SD_INCLUDE_MGOS_MDNS_H_
-#define CS_MOS_LIBS_DNS_SD_INCLUDE_MGOS_MDNS_H_
+#pragma once
 
 #include "mgos_features.h"
 #include "mgos_init.h"
@@ -72,5 +71,3 @@ struct mg_connection *mgos_mdns_get_listener(void);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* CS_MOS_LIBS_DNS_SD_INCLUDE_MGOS_MDNS_H_ */

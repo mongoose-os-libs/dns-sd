@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+#include "mgos_mdns_internal.h"
+
 #include <stdlib.h>
 
 #include "common/cs_dbg.h"
@@ -32,11 +34,9 @@
 #define IP4_ADDR_ANY IP_ADDR_ANY
 #endif
 
-void mgos_mdns_hal_join_group(const char *group) {
+bool mgos_mdns_hal_join_group(const char *group) {
   ip4_addr_t group_addr;
   group_addr.addr = inet_addr(group);
-
-  LOG(LL_INFO, ("Joining multicast group %s", group));
 
 #ifdef IP4_ADDR_ANY4
 #define ADDR IP4_ADDR_ANY4
@@ -44,7 +44,11 @@ void mgos_mdns_hal_join_group(const char *group) {
 #define ADDR IP4_ADDR_ANY
 #endif
 
-  if (igmp_joingroup(ADDR, &group_addr) != ERR_OK) {
-    LOG(LL_INFO, ("udp_join_multigroup failed!"));
-  };
+  err_t err = igmp_joingroup(ADDR, &group_addr);
+  if (err != ERR_OK) {
+    LOG(LL_ERROR, ("udp_join_multigroup failed! (%d)", (int) err));
+    return false;
+  }
+
+  return true;
 }

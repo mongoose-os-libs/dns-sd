@@ -15,8 +15,7 @@
  * limitations under the License.
  */
 
-#ifndef CS_MOS_LIBS_DNS_SD_SRC_MGOS_MDNS_INTERNAL_H_
-#define CS_MOS_LIBS_DNS_SD_SRC_MGOS_MDNS_INTERNAL_H_
+#pragma once
 
 #include "mgos_mdns.h"
 
@@ -31,13 +30,11 @@ extern "C" {
 bool mgos_mdns_init(void);
 
 /* Join multicast group. */
-void mgos_mdns_hal_join_group(const char *mcast_ip);
+bool mgos_mdns_hal_join_group(const char *mcast_ip);
 
 /* Leave multicast group. */
-void mgos_mdns_hal_leave_group(const char *mcast_ip);
+bool mgos_mdns_hal_leave_group(const char *mcast_ip);
 
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* CS_MOS_LIBS_DNS_SD_SRC_MGOS_MDNS_INTERNAL_H_ */
