@@ -335,6 +335,7 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
       }
       mbuf_free(&rdata);
       mbuf_free(&reply_mbuf);
+      (void) peer;
       break;
     }
   }
