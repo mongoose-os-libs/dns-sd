@@ -197,10 +197,16 @@ out:
 
 bool mgos_dns_sd_remove_service_instance(const char *name, const char *proto,
                                          int port) {
-  // TODO.
-  (void) name;
-  (void) proto;
-  (void) port;
+  struct mgos_dns_sd_service_entry *e;
+  SLIST_FOREACH(e, &s_names, next) {
+    if (e->port == port && strcasecmp(e->name, name) == 0 &&
+        strcasecmp(e->proto, proto) == 0) {
+      SLIST_REMOVE(&s_names, e, mgos_dns_sd_service_entry, next);
+      avahi_entry_group_reset(e->group);
+      mgos_dns_sd_service_entry_free(e);
+      return true;
+    }
+  };
   return false;
 }
 
