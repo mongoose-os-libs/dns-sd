@@ -466,6 +466,34 @@ bool mgos_dns_sd_remove_service_instance(const char *name, const char *proto,
   return true;
 }
 
+bool mgos_dns_sd_set_host_name(const char *name) {
+  if (name == NULL) {
+    name = mgos_sys_config_get_dns_sd_host_name();
+    if (name == NULL) {
+      name = mgos_sys_config_get_device_id();
+    }
+  }
+  if (name == NULL) {
+    return false;
+  }
+  bool adv = false;
+  if (s_host_name.len > 0) {
+    mgos_dns_sd_goodbye();
+    mg_strfree(&s_host_name);
+    adv = true;
+  }
+  s_host_name.len =
+      mg_asprintf((char **) &s_host_name.p, 0, "%s.%s", name, SD_DOMAIN);
+  mgos_expand_mac_address_placeholders((char *) s_host_name.p);
+  for (size_t i = 0; i < s_host_name.len - sizeof(SD_DOMAIN); i++) {
+    if (!isalnum((int) s_host_name.p[i])) ((char *) s_host_name.p)[i] = '-';
+  }
+  if (adv) {
+    mgos_dns_sd_advertise();
+  }
+  return true;
+}
+
 /* Initialize the DNS-SD subsystem */
 bool mgos_dns_sd_init(void) {
   if (!mgos_sys_config_get_dns_sd_enable()) return true;
@@ -488,20 +516,11 @@ bool mgos_dns_sd_init(void) {
 #endif
   mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1,
                  MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
-  const char *hn = mgos_sys_config_get_dns_sd_host_name();
-  if (hn == NULL) {
-    hn = mgos_sys_config_get_device_id();
-  }
-  if (hn == NULL) {
-    LOG(LL_ERROR, ("dns_sd.host_name and device.id are not set"));
+
+  if (!mgos_dns_sd_set_host_name(NULL)) {
     return false;
   }
-  s_host_name.len =
-      mg_asprintf((char **) &s_host_name.p, 0, "%s.%s", hn, SD_DOMAIN);
-  mgos_expand_mac_address_placeholders((char *) s_host_name.p);
-  for (size_t i = 0; i < s_host_name.len - sizeof(SD_DOMAIN); i++) {
-    if (!isalnum((int) s_host_name.p[i])) ((char *) s_host_name.p)[i] = '-';
-  }
+
   LOG(LL_INFO, ("DNS-SD initialized, host %.*s, ttl %d", (int) s_host_name.len,
                 s_host_name.p, mgos_sys_config_get_dns_sd_ttl()));
   return true;

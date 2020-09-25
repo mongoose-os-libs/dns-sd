@@ -71,6 +71,9 @@ void mgos_dns_sd_advertise(void);
 /* Send a goodbye packet */
 void mgos_dns_sd_goodbye(void);
 
+/* Set host name. If NULL is passed, updates from config. */
+bool mgos_dns_sd_set_host_name(const char *name);
+
 #ifdef __cplusplus
 }
 #endif
