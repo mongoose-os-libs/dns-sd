@@ -222,6 +222,13 @@ void mgos_dns_sd_goodbye(void) {
   // TODO
 }
 
+bool mgos_dns_sd_set_host_name(const char *name) {
+  // No, not really.
+  LOG(LL_ERROR, ("Cannot change host name"));
+  (void) name;
+  return false;
+}
+
 static void avahi_poll_cb(void *arg) {
   avahi_simple_poll_iterate((AvahiSimplePoll *) arg, 0);
 }
