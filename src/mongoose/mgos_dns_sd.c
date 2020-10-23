@@ -37,10 +37,12 @@
 #include "mgos_net.h"
 #include "mgos_sys_config.h"
 #include "mgos_timers.h"
-#include "mongoose.h"
+#include "mgos_utils.h"
 #ifdef MGOS_HAVE_WIFI
 #include "mgos_wifi.h"
 #endif
+
+#include "mongoose.h"
 
 #define SD_DOMAIN "local"
 #define MGOS_MDNS_QUERY_UNICAST 0x8000
@@ -514,14 +516,16 @@ bool mgos_dns_sd_init(void) {
   mgos_event_add_handler(MGOS_WIFI_EV_AP_STA_CONNECTED, dns_sd_net_ev_handler,
                          NULL);
 #endif
-  mgos_set_timer(mgos_sys_config_get_dns_sd_ttl() * 1000 / 2 + 1,
-                 MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
+  int ttl = mgos_sys_config_get_dns_sd_ttl();
+  int intvl_base = ttl * 1000 / 4;
+  int adv_intvl = mgos_rand_range(intvl_base * 0.9f, intvl_base);
+  mgos_set_timer(adv_intvl, MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
 
   if (!mgos_dns_sd_set_host_name(NULL)) {
     return false;
   }
 
-  LOG(LL_INFO, ("DNS-SD initialized, host %.*s, ttl %d", (int) s_host_name.len,
-                s_host_name.p, mgos_sys_config_get_dns_sd_ttl()));
+  LOG(LL_INFO, ("DNS-SD initialized, host %.*s, ttl %d, adv intvl %d",
+                (int) s_host_name.len, s_host_name.p, ttl, adv_intvl));
   return true;
 }
