@@ -44,6 +44,9 @@
 
 #include "mongoose.h"
 
+#define TTL_SHORT 2 * 60
+#define TTL_LONG 75 * 60
+
 #define SD_DOMAIN "local"
 #define MGOS_MDNS_QUERY_UNICAST 0x8000
 #define MGOS_MDNS_CACHE_FLUSH 0x8000
@@ -181,8 +184,9 @@ static struct mg_str get_service(struct mg_str name) {
   return mg_mk_str_n(p, (name.p + name.len) - p);
 }
 
-static void add_service_records(struct mg_dns_reply *reply, int ttl,
+static void add_service_records(struct mg_dns_reply *reply, bool goodbye,
                                 struct mbuf *rdata) {
+  int ttl = (goodbye ? 0 : TTL_LONG);
   struct mgos_dns_sd_service_entry *e1 = NULL;
   SLIST_FOREACH(e1, &s_instances, next) {
     bool found = false;
@@ -205,34 +209,36 @@ static void add_service_records(struct mg_dns_reply *reply, int ttl,
 
 static void add_instance_records(struct mg_dns_reply *reply,
                                  struct mgos_dns_sd_service_entry *e, bool ptr,
-                                 bool srv, bool txt, int ttl,
+                                 bool srv, bool txt, bool goodbye,
                                  struct mbuf *rdata) {
   const struct mg_str e_service = get_service(e->name);
+  int ttl_short = (goodbye ? 0 : TTL_SHORT);
   /* service PTR instance */
   if (ptr && !(e->flags & F_PTR_SENT)) {
-    add_ptr_record(reply, e_service, e->name, ttl, rdata);
+    add_ptr_record(reply, e_service, e->name, (goodbye ? 0 : TTL_LONG), rdata);
     e->flags |= F_PTR_SENT;
   }
   /* instance SRV host */
   if (srv && !(e->flags & F_SRV_SENT)) {
-    add_srv_record(reply, e->name, s_host_name, e->port, ttl, rdata);
+    add_srv_record(reply, e->name, s_host_name, e->port, ttl_short, rdata);
     e->flags |= F_SRV_SENT;
   }
   /* instance TXT txt */
   if (txt && !(e->flags & F_TXT_SENT)) {
-    add_txt_record(reply, e->name, e->txt, ttl, rdata);
+    add_txt_record(reply, e->name, e->txt, ttl_short, rdata);
     e->flags |= F_TXT_SENT;
   }
 }
 
-static void advertise(struct mg_dns_reply *reply, bool naive_client, int ttl,
-                      struct mbuf *rdata) {
-  add_service_records(reply, ttl, rdata);
+static void advertise(struct mg_dns_reply *reply, bool naive_client,
+                      bool goodbye, struct mbuf *rdata) {
+  add_service_records(reply, goodbye, rdata);
   struct mgos_dns_sd_service_entry *e = NULL;
   SLIST_FOREACH(e, &s_instances, next) {
-    add_instance_records(reply, e, true, true, true, ttl, rdata);
+    add_instance_records(reply, e, true, true, true, goodbye, rdata);
   }
   /* host A ip */
+  int ttl = (goodbye ? 0 : TTL_SHORT);
   add_a_record(reply, s_host_name, naive_client, ttl, rdata);
   add_nsec_record(reply, s_host_name, naive_client, ttl, rdata);
 }
@@ -251,7 +257,6 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
       /* the reply goes either to the sender or to a multicast dest */
       struct mg_connection *reply_conn = nc;
       char *peer = inet_ntoa(nc->sa.sin.sin_addr);
-      int ttl = mgos_sys_config_get_dns_sd_ttl();
       LOG(LL_DEBUG, ("-- DNS packet from %s (%d questions, %d answers)", peer,
                      msg->num_questions, msg->num_answers));
       mbuf_init(&rdata, 0);
@@ -294,8 +299,7 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
 
         if (rr->rtype == MG_DNS_PTR_RECORD &&
             mg_strcasecmp(name, mg_mk_str(SD_TYPE_ENUM_NAME)) == 0) {
-          advertise(&reply, naive_client, mgos_sys_config_get_dns_sd_ttl(),
-                    &rdata);
+          advertise(&reply, naive_client, false /* goodbye */, &rdata);
           have_a = true;
         } else if ((rr->rtype == MG_DNS_A_RECORD ||
                     rr->rtype == MG_DNS_AAAA_RECORD) &&
@@ -307,13 +311,14 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
             if (mg_strcasecmp(name, e->name) == 0) {
               bool need_srv = (rr->rtype == MG_DNS_SRV_RECORD);
               bool need_txt = (rr->rtype == MG_DNS_TXT_RECORD);
-              add_instance_records(&reply, e, false, need_srv, need_txt, ttl,
-                                   &rdata);
+              add_instance_records(&reply, e, false, need_srv, need_txt,
+                                   false /* goodbye */, &rdata);
               need_a = true;
             } else if (rr->rtype == MG_DNS_PTR_RECORD) {
               struct mg_str e_service = get_service(e->name);
               if (mg_strcasecmp(name, e_service) == 0) {
-                add_instance_records(&reply, e, true, true, true, ttl, &rdata);
+                add_instance_records(&reply, e, true, true, true,
+                                     false /* goodbye */, &rdata);
                 need_a = true;
               }
             }
@@ -321,8 +326,8 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
         }
       }
       if (need_a && !have_a) {
-        add_a_record(&reply, s_host_name, naive_client, ttl, &rdata);
-        add_nsec_record(&reply, s_host_name, naive_client, ttl, &rdata);
+        add_a_record(&reply, s_host_name, naive_client, TTL_SHORT, &rdata);
+        add_nsec_record(&reply, s_host_name, naive_client, TTL_SHORT, &rdata);
       }
 
       if (msg->num_answers > 0) {
@@ -345,20 +350,20 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
   (void) user_data;
 }
 
-static void dns_sd_advertise(struct mg_connection *c, int ttl) {
+static void dns_sd_advertise(struct mg_connection *c, bool goodbye) {
   struct mbuf mbuf1, mbuf2;
   struct mg_dns_message msg;
   struct mg_dns_reply reply;
-  LOG(LL_DEBUG, ("advertising, ttl=%d", ttl));
   mbuf_init(&mbuf1, 0);
   mbuf_init(&mbuf2, 0);
   memset(&msg, 0, sizeof(msg));
   msg.flags = 0x8400;
   reply = mg_dns_create_reply(&mbuf1, &msg);
   reset_flags();
-  advertise(&reply, false /* naive_client */, ttl, &mbuf2);
+  advertise(&reply, false /* naive_client */, goodbye, &mbuf2);
   if (msg.num_answers > 0) {
-    LOG(LL_DEBUG, ("sending adv as M, size %d", (int) reply.io->len));
+    LOG(LL_DEBUG, ("sending adv as M, size %d, goodbye %d", (int) reply.io->len,
+                   goodbye));
     mg_dns_send_reply(c, &reply);
   }
   mbuf_free(&mbuf1);
@@ -386,12 +391,12 @@ const char *mgos_dns_sd_get_host_name(void) {
 
 void mgos_dns_sd_advertise(void) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  if (c != NULL) dns_sd_advertise(c, mgos_sys_config_get_dns_sd_ttl());
+  if (c != NULL) dns_sd_advertise(c, false /* goodbye */);
 }
 
 void mgos_dns_sd_goodbye(void) {
   struct mg_connection *c = mgos_mdns_get_listener();
-  if (c != NULL) dns_sd_advertise(c, 0);
+  if (c != NULL) dns_sd_advertise(c, true /* goodbye */);
 }
 
 static void mgos_dns_sd_service_entry_free(
@@ -516,8 +521,7 @@ bool mgos_dns_sd_init(void) {
   mgos_event_add_handler(MGOS_WIFI_EV_AP_STA_CONNECTED, dns_sd_net_ev_handler,
                          NULL);
 #endif
-  int ttl = mgos_sys_config_get_dns_sd_ttl();
-  int intvl_base = ttl * 1000 / 4;
+  int intvl_base = TTL_SHORT * 1000 / 4;
   int adv_intvl = mgos_rand_range(intvl_base * 0.9f, intvl_base);
   mgos_set_timer(adv_intvl, MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
 
@@ -525,7 +529,7 @@ bool mgos_dns_sd_init(void) {
     return false;
   }
 
-  LOG(LL_INFO, ("DNS-SD initialized, host %.*s, ttl %d, adv intvl %d",
-                (int) s_host_name.len, s_host_name.p, ttl, adv_intvl));
+  LOG(LL_INFO, ("DNS-SD initialized, host %.*s, adv intvl %d",
+                (int) s_host_name.len, s_host_name.p, adv_intvl));
   return true;
 }
