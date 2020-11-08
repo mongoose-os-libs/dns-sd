@@ -107,8 +107,9 @@ static void add_srv_record(struct mg_dns_reply *reply, struct mg_str name,
   mg_dns_encode_name_s(rdata, host);
   mg_dns_encode_record(reply->io, &rr, name.p, name.len, rdata->buf,
                        rdata->len);
-  LOG(LL_DEBUG, ("    %d: %.*s SRV %d %.*s:%d", reply->msg->num_answers,
-                 (int) name.len, name.p, ttl, (int) host.len, host.p, port));
+  LOG(LL_VERBOSE_DEBUG,
+      ("    %d: %.*s SRV %d %.*s:%d", reply->msg->num_answers, (int) name.len,
+       name.p, ttl, (int) host.len, host.p, port));
   reply->msg->num_answers++;
 }
 
@@ -123,8 +124,8 @@ static void add_nsec_record(struct mg_dns_reply *reply, struct mg_str name,
   mbuf_append(rdata, "\x00\x01\x40", 3); /* Only A record is present */
   mg_dns_encode_record(reply->io, &rr, name.p, name.len, rdata->buf,
                        rdata->len);
-  LOG(LL_DEBUG, ("    %d: %.*s NSEC %d", reply->msg->num_answers,
-                 (int) name.len, name.p, ttl));
+  LOG(LL_VERBOSE_DEBUG, ("    %d: %.*s NSEC %d", reply->msg->num_answers,
+                         (int) name.len, name.p, ttl));
   reply->msg->num_answers++;
 }
 
@@ -148,8 +149,8 @@ static void add_a_record(struct mg_dns_reply *reply, struct mg_str name,
         make_dns_rr(MG_DNS_A_RECORD,
                     (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
     mg_dns_encode_record(reply->io, &rr, name.p, name.len, &addr, sizeof(addr));
-    LOG(LL_DEBUG, ("    %d: %.*s A %d %08x", reply->msg->num_answers,
-                   (int) name.len, name.p, ttl, (unsigned int) addr));
+    LOG(LL_VERBOSE_DEBUG, ("    %d: %.*s A %d %08x", reply->msg->num_answers,
+                           (int) name.len, name.p, ttl, (unsigned int) addr));
     reply->msg->num_answers++;
   }
   (void) rdata;
@@ -160,8 +161,8 @@ static void add_txt_record(struct mg_dns_reply *reply, struct mg_str name,
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_TXT_RECORD, RCLASS_IN_FLUSH, ttl);
   mg_dns_encode_record(reply->io, &rr, name.p, name.len, txt.p, txt.len);
-  LOG(LL_DEBUG, ("    %d: %.*s TXT %d %.*s", reply->msg->num_answers,
-                 (int) name.len, name.p, ttl, (int) txt.len, txt.p));
+  LOG(LL_VERBOSE_DEBUG, ("    %d: %.*s TXT %d %.*s", reply->msg->num_answers,
+                         (int) name.len, name.p, ttl, (int) txt.len, txt.p));
   reply->msg->num_answers++;
   (void) rdata;
 }
@@ -171,8 +172,9 @@ static void add_ptr_record(struct mg_dns_reply *reply, struct mg_str name,
   struct mg_dns_resource_record rr =
       make_dns_rr(MG_DNS_PTR_RECORD, RCLASS_IN_NOFLUSH, ttl);
   rdata->len = 0;
-  LOG(LL_DEBUG, ("    %d: %.*s PTR %d %.*s", reply->msg->num_answers,
-                 (int) name.len, name.p, ttl, (int) target.len, target.p));
+  LOG(LL_VERBOSE_DEBUG,
+      ("    %d: %.*s PTR %d %.*s", reply->msg->num_answers, (int) name.len,
+       name.p, ttl, (int) target.len, target.p));
   mg_dns_encode_name_s(rdata, target);
   mg_dns_encode_record(reply->io, &rr, name.p, name.len, rdata->buf,
                        rdata->len);
@@ -254,6 +256,7 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
       struct mg_dns_reply reply;
       struct mbuf rdata;
       struct mbuf reply_mbuf;
+      struct mg_dns_resource_record answers[MG_MAX_DNS_ANSWERS];
       /* the reply goes either to the sender or to a multicast dest */
       struct mg_connection *reply_conn = nc;
       char *peer = inet_ntoa(nc->sa.sin.sin_addr);
@@ -261,6 +264,8 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
                      msg->num_questions, msg->num_answers));
       mbuf_init(&rdata, 0);
       mbuf_init(&reply_mbuf, 512);
+      int num_answers = msg->num_answers;
+      for (int i = 0; i < num_answers; i++) answers[i] = msg->answers[i];
       int tmp = msg->num_questions;
       msg->num_questions = 0;
       reply = mg_dns_create_reply(&reply_mbuf, msg);
@@ -282,6 +287,7 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
         LOG(LL_DEBUG, ("  Q type %d name %.*s (%s), unicast: %d", rr->rtype,
                        (int) name.len, name.p, (is_unicast ? "QU" : "QM"),
                        (rr->rclass & MGOS_MDNS_QUERY_UNICAST) != 0));
+
         /*
          * If there is at least one question that requires a multicast answer
          * the whole reply goes to a multicast destination
@@ -317,9 +323,27 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
             } else if (rr->rtype == MG_DNS_PTR_RECORD) {
               struct mg_str e_service = get_service(e->name);
               if (mg_strcasecmp(name, e_service) == 0) {
-                add_instance_records(&reply, e, true, true, true,
-                                     false /* goodbye */, &rdata);
-                need_a = true;
+                // check for answers https://tools.ietf.org/html/rfc6762
+                bool new_answer = true;
+
+                for (int k = 0; k < num_answers; k++) {
+                  struct mg_dns_resource_record *a = &answers[k];
+                  // can use same name_buf, as name no longer used
+                  mg_dns_uncompress_name(msg, &a->rdata, name_buf,
+                                         sizeof(name_buf) - 1);
+                  struct mg_str domain = mg_mk_str(name_buf);
+                  if (mg_strcasecmp(domain, e->name) == 0) {
+                    LOG(LL_DEBUG, ("  PTR %.*s - already in answers, skipping",
+                                   domain.len, domain.p));
+                    new_answer = false;
+                    break;
+                  }
+                }
+                if (new_answer) {
+                  add_instance_records(&reply, e, true, true, true,
+                                       false /* goodbye */, &rdata);
+                  need_a = true;
+                }
               }
             }
           }
