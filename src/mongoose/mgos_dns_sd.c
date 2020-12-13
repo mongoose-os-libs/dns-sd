@@ -354,6 +354,7 @@ static void dns_sd_advertise(struct mg_connection *c, bool goodbye) {
   struct mbuf mbuf1, mbuf2;
   struct mg_dns_message msg;
   struct mg_dns_reply reply;
+  if (c == NULL) return;
   mbuf_init(&mbuf1, 0);
   mbuf_init(&mbuf2, 0);
   memset(&msg, 0, sizeof(msg));
@@ -371,7 +372,7 @@ static void dns_sd_advertise(struct mg_connection *c, bool goodbye) {
 }
 
 static void dns_sd_adv_timer_cb(void *arg) {
-  mgos_dns_sd_advertise();
+  dns_sd_advertise(mgos_mdns_get_listener(), false /* goodbye */);
   (void) arg;
 }
 
@@ -379,7 +380,7 @@ static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
   struct mg_connection *c = mgos_mdns_get_listener();
   LOG(LL_DEBUG, ("ev %d, mdns_listener %p", ev, c));
   if (c == NULL) return;
-  mgos_dns_sd_advertise();
+  dns_sd_advertise(mgos_mdns_get_listener(), false /* goodbye */);
   mgos_set_timer(1000, 0, dns_sd_adv_timer_cb, NULL); /* By RFC, repeat */
   (void) evd;
   (void) arg;
@@ -389,14 +390,18 @@ const char *mgos_dns_sd_get_host_name(void) {
   return s_host_name.p;
 }
 
+// dns_sd_advertise uses a lot of stack, so it's run via invoke_cb.
+static void mgos_dns_sd_advertise2(void *arg) {
+  bool goodbye = (bool) (intptr_t) arg;
+  dns_sd_advertise(mgos_mdns_get_listener(), goodbye);
+}
+
 void mgos_dns_sd_advertise(void) {
-  struct mg_connection *c = mgos_mdns_get_listener();
-  if (c != NULL) dns_sd_advertise(c, false /* goodbye */);
+  mgos_invoke_cb(mgos_dns_sd_advertise2, (void *) 0, false /* from_isr */);
 }
 
 void mgos_dns_sd_goodbye(void) {
-  struct mg_connection *c = mgos_mdns_get_listener();
-  if (c != NULL) dns_sd_advertise(c, true /* goodbye */);
+  mgos_invoke_cb(mgos_dns_sd_advertise2, (void *) 1, false /* from_isr */);
 }
 
 static void mgos_dns_sd_service_entry_free(
