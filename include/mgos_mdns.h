@@ -24,13 +24,19 @@
 
 #pragma once
 
-#include "mgos_features.h"
-#include "mgos_init.h"
-#include "mgos_mongoose.h"
+#include "mgos_net.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define MGOS_EV_MDNS_MESSAGE 111
+struct mgos_mdns_message {
+  enum mgos_net_if_type if_type;
+  int if_instance;
+  struct sockaddr_in local_ip4;
+  struct mg_dns_message *dns_msg;
+};
 
 /*
  * Register a mDNS event handler `handler` with the arbitrary userdata `ud`.
@@ -44,8 +50,7 @@ extern "C" {
  *     struct mg_dns_message *msg = (struct mg_dns_message *) ev_data;
  *     char *peer = inet_ntoa(nc->sa.sin.sin_addr);
  *     LOG(LL_DEBUG, ("---- DNS packet from %s (%d questions, %d answers)",
- *peer,
- *           msg->num_questions, msg->num_answers));
+ *                    peer, msg->num_questions, msg->num_answers));
  *   }
  *
  *   (void) user_data;
@@ -65,8 +70,13 @@ void mgos_mdns_add_handler(mg_event_handler_t handler, void *ud);
  */
 void mgos_mdns_remove_handler(mg_event_handler_t handler, void *ud);
 
-/* Return global mDNS connection. */
-struct mg_connection *mgos_mdns_get_listener(void);
+/*
+ * Send an advertisement message on the specified interface.
+ * Takes over mbuf and frees mbuf if successful.
+ */
+struct mg_dns_reply;
+bool mgos_mdns_advertise(enum mgos_net_if_type if_type, int if_instance,
+                         struct mbuf *mb);
 
 #ifdef __cplusplus
 }

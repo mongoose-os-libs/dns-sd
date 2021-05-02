@@ -32,9 +32,6 @@ bool mgos_mdns_init(void);
 /* Join multicast group. */
 bool mgos_mdns_hal_join_group(const char *mcast_ip);
 
-/* Leave multicast group. */
-bool mgos_mdns_hal_leave_group(const char *mcast_ip);
-
 #ifdef __cplusplus
 }
 #endif

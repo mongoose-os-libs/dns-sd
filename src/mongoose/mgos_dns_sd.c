@@ -130,29 +130,16 @@ static void add_nsec_record(struct mg_dns_reply *reply, struct mg_str name,
 }
 
 static void add_a_record(struct mg_dns_reply *reply, struct mg_str name,
-                         bool naive_client, int ttl, struct mbuf *rdata) {
-  uint32_t addr = 0;
-  struct mgos_net_ip_info ip_info;
-#ifdef MGOS_HAVE_WIFI
-  if (mgos_net_get_ip_info(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_STA,
-                           &ip_info)) {
-    addr = ip_info.ip.sin_addr.s_addr;
-  } else if (mgos_net_get_ip_info(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_AP,
-                                  &ip_info)) {
-    addr = ip_info.ip.sin_addr.s_addr;
-  }
-#else
-  (void) ip_info;
-#endif
-  if (addr != 0) {
-    struct mg_dns_resource_record rr =
-        make_dns_rr(MG_DNS_A_RECORD,
-                    (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
-    mg_dns_encode_record(reply->io, &rr, name.p, name.len, &addr, sizeof(addr));
-    LOG(LL_DEBUG, ("    %d: %.*s A %d %08x", reply->msg->num_answers,
-                   (int) name.len, name.p, ttl, (unsigned int) addr));
-    reply->msg->num_answers++;
-  }
+                         uint32_t addr, bool naive_client, int ttl,
+                         struct mbuf *rdata) {
+  if (addr == 0) return;
+  struct mg_dns_resource_record rr =
+      make_dns_rr(MG_DNS_A_RECORD,
+                  (naive_client ? RCLASS_IN_NOFLUSH : RCLASS_IN_FLUSH), ttl);
+  mg_dns_encode_record(reply->io, &rr, name.p, name.len, &addr, sizeof(addr));
+  LOG(LL_DEBUG, ("    %d: %.*s A %d %s", reply->msg->num_answers,
+                 (int) name.len, name.p, ttl, inet_ntoa(addr)));
+  reply->msg->num_answers++;
   (void) rdata;
 }
 
@@ -231,8 +218,8 @@ static void add_instance_records(struct mg_dns_reply *reply,
   }
 }
 
-static void advertise(struct mg_dns_reply *reply, bool naive_client,
-                      bool goodbye, struct mbuf *rdata) {
+static void advertise(struct mg_dns_reply *reply, uint32_t ip_addr,
+                      bool naive_client, bool goodbye, struct mbuf *rdata) {
   add_service_records(reply, goodbye, rdata);
   struct mgos_dns_sd_service_entry *e = NULL;
   SLIST_FOREACH(e, &s_instances, next) {
@@ -240,26 +227,45 @@ static void advertise(struct mg_dns_reply *reply, bool naive_client,
   }
   /* host A ip */
   int ttl = (goodbye ? 0 : TTL_SHORT);
-  add_a_record(reply, s_host_name, naive_client, ttl, rdata);
+  add_a_record(reply, s_host_name, ip_addr, naive_client, ttl, rdata);
   add_nsec_record(reply, s_host_name, naive_client, ttl, rdata);
+}
+
+static void dns_sd_advertise_if(enum mgos_net_if_type if_type, int if_instance,
+                                bool goodbye);
+
+static void dns_sd_adv_repeat_timer_cb(void *arg) {
+  uintptr_t x = (uintptr_t) arg;
+  enum mgos_net_if_type if_type = (enum mgos_net_if_type)(x >> 16);
+  int if_instance = (int) (x & 0xffff);
+  dns_sd_advertise_if(if_type, if_instance, false /* goodbye */);
 }
 
 static void handler(struct mg_connection *nc, int ev, void *ev_data,
                     void *user_data) {
   if (!mgos_sys_config_get_dns_sd_enable()) return;
+  const struct mgos_mdns_message *mm = (struct mgos_mdns_message *) ev_data;
 
   switch (ev) {
-    case MG_DNS_MESSAGE: {
+    case MG_EV_CONNECT: {
+      dns_sd_advertise_if(mm->if_type, mm->if_instance, false /* goodbye */);
+      // Repeat after 1 second, per standard.
+      uintptr_t arg = (((uintptr_t) mm->if_type) << 16) | mm->if_instance;
+      mgos_set_timer(1000, 0, dns_sd_adv_repeat_timer_cb, (void *) arg);
+      break;
+    }
+    case MGOS_EV_MDNS_MESSAGE: {
       int i;
-      struct mg_dns_message *msg = (struct mg_dns_message *) ev_data;
+      struct mg_dns_message *msg = mm->dns_msg;
       struct mg_dns_reply reply;
       struct mbuf rdata;
       struct mbuf reply_mbuf;
       /* the reply goes either to the sender or to a multicast dest */
       struct mg_connection *reply_conn = nc;
       char *peer = inet_ntoa(nc->sa.sin.sin_addr);
-      LOG(LL_DEBUG, ("-- DNS packet from %s (%d questions, %d answers)", peer,
-                     msg->num_questions, msg->num_answers));
+      LOG(LL_DEBUG, ("-- %d.%d DNS packet from %s (%d questions, %d answers)",
+                     mm->if_type, mm->if_instance, peer, msg->num_questions,
+                     msg->num_answers));
       mbuf_init(&rdata, 0);
       mbuf_init(&reply_mbuf, 512);
       int tmp = msg->num_questions;
@@ -272,6 +278,9 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
        * If ID is not 0, we take it to indicate a naive client trying to
        * use multicast address for queries, i.e. dig @224.0.0.251 */
       bool naive_client = (msg->transaction_id != 0);
+
+      /* HACK: Passed from LWIP netif */
+      const uint32_t local_addr = (uint32_t)(uintptr_t) nc->priv_2;
 
       for (i = 0; i < msg->num_questions; i++) {
         char name_buf[256];
@@ -300,7 +309,8 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
 
         if (rr->rtype == MG_DNS_PTR_RECORD &&
             mg_strcasecmp(name, mg_mk_str(SD_TYPE_ENUM_NAME)) == 0) {
-          advertise(&reply, naive_client, false /* goodbye */, &rdata);
+          advertise(&reply, local_addr, naive_client, false /* goodbye */,
+                    &rdata);
           have_a = true;
         } else if ((rr->rtype == MG_DNS_A_RECORD ||
                     rr->rtype == MG_DNS_AAAA_RECORD) &&
@@ -327,8 +337,13 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
         }
       }
       if (need_a && !have_a) {
-        add_a_record(&reply, s_host_name, naive_client, TTL_SHORT, &rdata);
-        add_nsec_record(&reply, s_host_name, naive_client, TTL_SHORT, &rdata);
+        if (local_addr != 0) {
+          add_a_record(&reply, s_host_name, local_addr, naive_client, TTL_SHORT,
+                       &rdata);
+          add_nsec_record(&reply, s_host_name, naive_client, TTL_SHORT, &rdata);
+        } else {
+          LOG(LL_ERROR, ("Local interface address not recorded!"));
+        }
       }
 
       if (msg->num_answers > 0) {
@@ -351,39 +366,43 @@ static void handler(struct mg_connection *nc, int ev, void *ev_data,
   (void) user_data;
 }
 
-static void dns_sd_advertise(struct mg_connection *c, bool goodbye) {
+static void dns_sd_advertise_if(enum mgos_net_if_type if_type, int if_instance,
+                                bool goodbye) {
+  struct mgos_net_ip_info ip_info;
+  if (!mgos_net_get_ip_info(if_type, if_instance, &ip_info)) return;
   struct mbuf mbuf1, mbuf2;
   struct mg_dns_message msg;
   struct mg_dns_reply reply;
-  if (c == NULL) return;
   mbuf_init(&mbuf1, 0);
   mbuf_init(&mbuf2, 0);
   memset(&msg, 0, sizeof(msg));
   msg.flags = 0x8400;
   reply = mg_dns_create_reply(&mbuf1, &msg);
   reset_flags();
-  advertise(&reply, false /* naive_client */, goodbye, &mbuf2);
+  advertise(&reply, ip_info.ip.sin_addr.s_addr, false /* naive_client */,
+            goodbye, &mbuf2);
   if (msg.num_answers > 0) {
-    LOG(LL_DEBUG, ("sending adv as M, size %d, goodbye %d", (int) reply.io->len,
-                   goodbye));
-    mg_dns_send_reply(c, &reply);
+    LOG(LL_DEBUG, ("%d.%d sending adv as M, size %d, goodbye %d", if_type,
+                   if_instance, (int) reply.io->len, goodbye));
+    mg_dns_insert_header(reply.io, reply.start, reply.msg);
+    mgos_mdns_advertise(if_type, if_instance, &mbuf1);
   }
   mbuf_free(&mbuf1);
   mbuf_free(&mbuf2);
 }
 
-static void dns_sd_adv_timer_cb(void *arg) {
-  dns_sd_advertise(mgos_mdns_get_listener(), false /* goodbye */);
-  (void) arg;
+static void dns_sd_advertise(bool goodbye) {
+#ifdef MGOS_HAVE_WIFI
+  dns_sd_advertise_if(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_STA, goodbye);
+  dns_sd_advertise_if(MGOS_NET_IF_TYPE_WIFI, MGOS_NET_IF_WIFI_AP, goodbye);
+#endif
+#ifdef MGOS_HAVE_ETHERNET
+  dns_sd_advertise_if(MGOS_NET_IF_TYPE_ETHERNET, 0, goodbye);
+#endif
 }
 
-static void dns_sd_net_ev_handler(int ev, void *evd, void *arg) {
-  struct mg_connection *c = mgos_mdns_get_listener();
-  LOG(LL_DEBUG, ("ev %d, mdns_listener %p", ev, c));
-  if (c == NULL) return;
-  dns_sd_advertise(mgos_mdns_get_listener(), false /* goodbye */);
-  mgos_set_timer(1000, 0, dns_sd_adv_timer_cb, NULL); /* By RFC, repeat */
-  (void) evd;
+static void dns_sd_adv_timer_cb(void *arg) {
+  dns_sd_advertise(false /* goodbye */);
   (void) arg;
 }
 
@@ -394,7 +413,7 @@ const char *mgos_dns_sd_get_host_name(void) {
 // dns_sd_advertise uses a lot of stack, so it's run via invoke_cb.
 static void mgos_dns_sd_advertise2(void *arg) {
   bool goodbye = (bool) (intptr_t) arg;
-  dns_sd_advertise(mgos_mdns_get_listener(), goodbye);
+  dns_sd_advertise(goodbye);
 }
 
 void mgos_dns_sd_advertise(void) {
@@ -510,23 +529,8 @@ bool mgos_dns_sd_set_host_name(const char *name) {
 /* Initialize the DNS-SD subsystem */
 bool mgos_dns_sd_init(void) {
   if (!mgos_sys_config_get_dns_sd_enable()) return true;
-#ifdef MGOS_HAVE_WIFI
-  if (mgos_sys_config_get_wifi_ap_enable() &&
-      mgos_sys_config_get_wifi_sta_enable() &&
-      mgos_sys_config_get_wifi_ap_keep_enabled()) {
-    /* Reason: multiple interfaces. More work is required to make sure
-     * requests and responses are correctly plumbed to the right interface. */
-    LOG(LL_ERROR, ("MDNS does not work in AP+STA mode"));
-    return true;
-  }
-#endif
   if (!mgos_mdns_init()) return false;
   mgos_mdns_add_handler(handler, NULL);
-  mgos_event_add_handler(MGOS_NET_EV_IP_ACQUIRED, dns_sd_net_ev_handler, NULL);
-#ifdef MGOS_HAVE_WIFI
-  mgos_event_add_handler(MGOS_WIFI_EV_AP_STA_CONNECTED, dns_sd_net_ev_handler,
-                         NULL);
-#endif
   int intvl_base = TTL_SHORT * 1000 / 4;
   int adv_intvl = mgos_rand_range(intvl_base * 0.9f, intvl_base);
   mgos_set_timer(adv_intvl, MGOS_TIMER_REPEAT, dns_sd_adv_timer_cb, NULL);
