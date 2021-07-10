@@ -495,6 +495,7 @@ bool mgos_dns_sd_remove_service_instance(const char *name, const char *proto,
   if (e == NULL) return false;
   SLIST_REMOVE(&s_instances, e, mgos_dns_sd_service_entry, next);
   // TODO: Send a good-bye packet for the associated records.
+  mgos_dns_sd_service_entry_free(e);
   return true;
 }
 
