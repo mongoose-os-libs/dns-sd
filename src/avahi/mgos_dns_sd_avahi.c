@@ -197,6 +197,7 @@ out:
 
 bool mgos_dns_sd_remove_service_instance(const char *name, const char *proto,
                                          int port) {
+  if (s_client == NULL) return false;
   struct mgos_dns_sd_service_entry *e;
   SLIST_FOREACH(e, &s_names, next) {
     if (e->port == port && strcasecmp(e->name, name) == 0 &&
@@ -211,6 +212,7 @@ bool mgos_dns_sd_remove_service_instance(const char *name, const char *proto,
 }
 
 const char *mgos_dns_sd_get_host_name(void) {
+  if (s_client == NULL) return NULL;
   return avahi_client_get_host_name_fqdn(s_client);
 }
 
