@@ -1,5 +1,0 @@
-config_schema:
-  - ["dns_sd.host_name", "mOS-esp32-??????"]
-
-sources:
-  - src/lwip

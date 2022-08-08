@@ -35,6 +35,27 @@ conds:
       sources:
         - src/avahi
 
+  - when: mos.platform == "esp32"
+    apply:
+      sources:
+        - src/lwip
+      config_schema:
+        - ["dns_sd.host_name", "mOS-esp32-??????"]
+
+  - when: mos.platform == "esp32c3"
+    apply:
+      sources:
+        - src/lwip
+      config_schema:
+        - ["dns_sd.host_name", "mOS-esp32c3-??????"]
+
+  - when: mos.platform == "esp8266"
+    apply:
+      sources:
+        - src/lwip
+      config_schema:
+        - ["dns_sd.host_name", "mOS-esp8266-??????"]
+
 tags:
   - c
   - net
