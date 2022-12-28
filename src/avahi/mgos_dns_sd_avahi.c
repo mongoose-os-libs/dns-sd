@@ -25,9 +25,7 @@
 #include <avahi-common/simple-watch.h>
 #include <avahi-common/strlst.h>
 
-#include "common/queue.h"
 #include "mgos.h"
-#include "mgos_mongoose.h"
 
 static AvahiClient *s_client = NULL;
 static bool s_is_running = false;
@@ -231,7 +229,7 @@ bool mgos_dns_sd_set_host_name(const char *name) {
   return false;
 }
 
-static void avahi_poll_cb(void *arg) {
+static void avahi_poll_timer_cb(void *arg) {
   avahi_simple_poll_iterate((AvahiSimplePoll *) arg, 0);
 }
 
@@ -251,7 +249,7 @@ bool mgos_dns_sd_init(void) {
 
   LOG(LL_INFO, ("Avahi client created"));
 
-  mgos_add_poll_cb(avahi_poll_cb, sp);
+  mgos_set_timer(200, MGOS_TIMER_REPEAT, avahi_poll_timer_cb, sp);
 
   return true;
 }
