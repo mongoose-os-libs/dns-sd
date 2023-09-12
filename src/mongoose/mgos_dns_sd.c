@@ -464,7 +464,7 @@ bool mgos_dns_sd_add_service_instance(
   }
   const struct mg_str txt = MG_MK_STR_N(buf, p - buf);
   mg_strfree(&e->txt);
-  e->txt = mg_strdup(txt);
+  e->txt = mg_strdup_nul(txt);
   res = (e->txt.len == txt.len);
 
 out:
